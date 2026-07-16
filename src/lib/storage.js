@@ -364,6 +364,13 @@ function sessionFromRow(row) {
     group: row.muscle_group,
     sets: row.sets || [],
     splitId: row.split_id ?? null,
+    // Was silently dropped before — the column has existed since the
+    // earliest migration, and select("*") was already fetching it, it
+    // just never made it into the mapped object. Used as a tiebreak
+    // wherever "the last session" matters (PR flags, progression/deload
+    // suggestions, exercise history) — date alone can't distinguish two
+    // sessions of the same exercise logged on the same calendar day.
+    createdAt: row.created_at ?? null,
   };
 }
 
@@ -374,7 +381,8 @@ export async function loadWorkoutSessions(userId) {
       .from("workout_sessions")
       .select("*")
       .eq("user_id", userId)
-      .order("date");
+      .order("date")
+      .order("created_at");
     if (error) throw error;
     const sessions = (data || []).map(sessionFromRow);
     writeCache("sessions", userId, sessions);
@@ -388,7 +396,10 @@ export async function loadWorkoutSessions(userId) {
 // Inserts one or more finished exercise blocks as new session rows.
 // IDs are generated client-side so the UI can show them immediately even
 // before the write reaches the server (and so a queued retry replays
-// with the exact same IDs instead of creating duplicates).
+// with the exact same IDs instead of creating duplicates). created_at is
+// also set client-side (rather than left to the DB default) so the
+// optimistic version shown before the server round-trip already has a
+// real timestamp instead of a temporary null.
 export async function insertWorkoutSessions(userId, sessions) {
   if (!userId || !sessions.length) return [];
   const rows = sessions.map((s) => ({
@@ -399,6 +410,7 @@ export async function insertWorkoutSessions(userId, sessions) {
     muscle_group: s.group,
     sets: s.sets,
     split_id: s.splitId ?? null,
+    created_at: new Date().toISOString(),
   }));
   const optimistic = rows.map(sessionFromRow);
 

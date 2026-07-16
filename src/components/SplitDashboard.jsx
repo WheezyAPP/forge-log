@@ -106,7 +106,11 @@ function saveDismissed(userId, obj) {
 }
 
 function computePRFlags(sessions) {
-  const sorted = [...sessions].sort((a,b) => a.date.localeCompare(b.date) || String(a.id).localeCompare(String(b.id)));
+  // Same-day duplicates need a real chronological tiebreak — id used to
+  // be used for this, but ids are random UUIDs, not chronologically
+  // sortable, so which of two same-day sessions "counted first" (and
+  // therefore which one could show a PR badge) was effectively random.
+  const sorted = [...sessions].sort((a,b) => a.date.localeCompare(b.date) || (a.createdAt || "").localeCompare(b.createdAt || "") || String(a.id).localeCompare(String(b.id)));
   const best = {}; const seen = new Set(); const flags = {};
   for (const s of sorted) {
     const filled = (s.sets||[]).filter(x => x.weight && x.reps);
@@ -473,7 +477,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     const map = {};
     for (const s of workoutSessions) { (map[s.exercise] ||= []).push(s); }
     return Object.entries(map).map(([ex, sessions]) => {
-      const sorted = [...sessions].sort((a,b) => a.date.localeCompare(b.date));
+      const sorted = [...sessions].sort((a,b) => a.date.localeCompare(b.date) || (a.createdAt || "").localeCompare(b.createdAt || ""));
       const last = sorted[sorted.length-1];
       const best = Math.max(...sorted.map(s => sessionBest1RM(s.sets)));
       const totalVolume = sorted.reduce((sum, s) => sum + sessionVolume(s.sets), 0);

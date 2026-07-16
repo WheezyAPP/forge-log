@@ -103,6 +103,7 @@ const DEFAULT_PROFILE = {
   goalStartedOn: null, // when the current lose/gain goal began — same idea as miniCutStartedOn, generalized so any goal type can track "days in" and accumulated deficit/surplus from a real date instead of guessing from your first logged day
   adaptiveTdee: null, // TDEE derived from your own logged weight+calorie data (energy-balance method), overriding the Mifflin-St Jeor formula when set
   adaptiveTdeeSetOn: null,
+  adaptiveTdeeUpdatedAt: null, // precise timestamp (unlike the date-only adaptiveTdeeSetOn) used only to gate the 72-hour auto-update cooldown — set on both manual adoption and automatic recalculation
   useAdaptiveBodyFat: false, // opt-in for the formula + Navy circumference blend — off by default, same pattern as adaptiveTdee but a plain toggle instead of a frozen snapshot, since body measurements should keep updating the estimate live rather than going stale
   showBodyFatPct: null, // null = no explicit choice — defaults to hidden for female, shown for male, since this can be sensitive info; once explicitly set either way it sticks regardless of gender changes
   creatineAlreadySaturated: false, // lets someone already consistently taking creatine before joining skip the "just starting" ramp the 28-day rolling window would otherwise show
@@ -1069,22 +1070,28 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   // dates. Calling this three times in a row for three fields wouldn't
   // work correctly: each call closes over the same pre-update `profile`,
   // so only the last call's change would actually stick.
-  // Called after any save that touches today's weight. Only actually
-  // updates profile.adaptiveTdee if the recomputed value is genuinely
-  // different — since computeAdaptiveTDEE is a pure function of entries,
-  // a gap in weigh-ins (no new weight logged) means the input hasn't
-  // changed, so the output won't either, and nothing gets touched. That's
-  // what keeps the stored value steady through a gap without needing to
-  // track "was there a weigh-in today" as a separate signal — it falls
-  // straight out of only writing on an actual change.
+  // Called after any save that touches today's weight. Recalculating on
+  // every single save was the bug: a rolling 14-day window shifts by one
+  // day each time you log, and normal day-to-day weight noise (water,
+  // sodium, glycogen) is enough to nudge the computed number — so an
+  // active daily logger saw their "adopted" TDEE silently rewritten
+  // almost every day, which defeats the whole point of a frozen,
+  // deliberately-adopted number. A 72-hour cooldown (gated on
+  // adaptiveTdeeUpdatedAt, a precise timestamp — adaptiveTdeeSetOn is
+  // date-only and only for display) still lets the number track a real
+  // trend without chasing daily wobble. Manual "Update to latest" always
+  // bypasses this, since that's a deliberate action, not an automatic one.
+  const AUTO_TDEE_COOLDOWN_MS = 72 * 60 * 60 * 1000;
   function maybeAutoUpdateAdaptiveTdee(nextEntries) {
     if (profile.adaptiveTdee == null) return; // feature not active
+    const lastUpdateMs = profile.adaptiveTdeeUpdatedAt ? new Date(profile.adaptiveTdeeUpdatedAt).getTime() : 0;
+    if (Date.now() - lastUpdateMs < AUTO_TDEE_COOLDOWN_MS) return; // too soon — wait out the cooldown
     const result = computeAdaptiveTDEE(nextEntries);
     if (!result.ready) return;
     const newTdee = Math.round(result.tdee);
     if (newTdee === Math.round(profile.adaptiveTdee)) return; // no real change
-    handleProfileChange({ adaptiveTdee: newTdee, adaptiveTdeeSetOn: todayStr() });
-    toastSuccess(`Adaptive TDEE updated to ${fmt(newTdee)} cal based on your latest weigh-in`);
+    handleProfileChange({ adaptiveTdee: newTdee, adaptiveTdeeSetOn: todayStr(), adaptiveTdeeUpdatedAt: new Date().toISOString() });
+    toastSuccess(`Adaptive TDEE updated to ${fmt(newTdee)} cal based on your logged data`);
   }
 
   async function handleProfileChange(fieldOrPatch, value) {
@@ -2591,8 +2598,17 @@ function EntryJourney({ dates, getValue, getLabel, selectedDate, onSelect, rende
 
 function CutProgressCard({ progress }) {
   const { isMiniCut, isGain, startDate, usedFallback, totalDelta, daysCounted, daysMissing, avgPerDay, estLbsChange, totalDaySpan } = progress;
-  const isPositive = totalDelta >= 0; // deficit for lose/mini-cut, surplus for gain — both framed as the "good direction" for that goal
-  const noun = isGain ? "surplus" : "deficit";
+  // Whether the ACTUAL accumulated calories were a surplus or a deficit —
+  // independent of which goal was set. totalDelta's sign already flips
+  // meaning between goal types upstream (a bulk accumulates "consumed −
+  // tdee", a cut accumulates "tdee − consumed"), so a plain totalDelta
+  // >= 0 check meant opposite things depending on goal type. This maps
+  // both back to one universal, sign-matches-word convention — positive
+  // always reads as surplus, negative always reads as deficit, same as
+  // the rest of the app (see balancePhrase) — instead of always framing
+  // the goal's "good direction" as positive, which made a real deficit
+  // during a bulk display as a positive number labeled "deficit".
+  const actualIsSurplus = isGain ? totalDelta >= 0 : totalDelta < 0;
   const title = isMiniCut ? "Mini-cut progress" : isGain ? "Bulk progress" : "Cut progress";
   return (
     <div className="ft-card ft-card-hero" style={{ padding: 16 }}>
@@ -2601,15 +2617,15 @@ function CutProgressCard({ progress }) {
         Since {prettyDate(startDate)}{usedFallback && " (your first logged day — set a start date in Settings for a precise total)"}
       </div>
       <div className="ft-mono ft-grad-text" style={{ fontSize: 26, fontWeight: 700 }}>
-        {isPositive ? "−" : "+"}{fmt(Math.abs(totalDelta))} cal
+        {actualIsSurplus ? "+" : "−"}{fmt(Math.abs(totalDelta))} cal
       </div>
       <div style={{ fontSize: 11, color: COLORS.creamDim, marginTop: 2 }}>
-        accumulated {isPositive ? noun : (isGain ? "deficit" : "surplus")} · ≈{fmt(Math.abs(estLbsChange), 1)} lbs {isGain ? "gained (muscle + some fat)" : "of fat"}
+        accumulated {actualIsSurplus ? "surplus" : "deficit"} · ≈{fmt(Math.abs(estLbsChange), 1)} lbs {actualIsSurplus ? "gained (muscle + some fat)" : "of fat"}
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 12, borderTop: `1px solid ${COLORS.border}` }}>
         <div>
           <div style={{ fontSize: 9.5, color: COLORS.creamDim, textTransform: "uppercase" }}>Avg / day</div>
-          <div className="ft-mono" style={{ fontSize: 13, fontWeight: 600 }}>{avgPerDay >= 0 ? "−" : "+"}{fmt(Math.abs(avgPerDay))} cal</div>
+          <div className="ft-mono" style={{ fontSize: 13, fontWeight: 600 }}>{actualIsSurplus ? "+" : "−"}{fmt(Math.abs(avgPerDay))} cal</div>
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 9.5, color: COLORS.creamDim, textTransform: "uppercase" }}>Logged / calendar days</div>
@@ -4154,7 +4170,7 @@ function AdaptiveTdeeCard({ adaptive, profile, onProfileChange }) {
       <div className="ft-card" style={{ padding: 18, maxWidth: 380, flex: 1, minWidth: 280 }}>
         <div className="ft-label" style={{ marginBottom: 6 }}>Adaptive TDEE</div>
         <div style={{ fontSize: 12.5, color: COLORS.creamDim, lineHeight: 1.5 }}>
-          Once you've logged both weight and calories on enough days in each half of a 2-week window, this compares your actual weight change to your actual intake and solves for what your real maintenance calories must be — self-correcting from your own data instead of a formula guess.
+          Log your weight and calories most days for two weeks. This works out your real maintenance calories from what actually happened to your body — more accurate than a formula that only knows your height, weight, and age.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
           <div>
@@ -4187,7 +4203,7 @@ function AdaptiveTdeeCard({ adaptive, profile, onProfileChange }) {
       </div>
       <div className="ft-mono ft-grad-text" style={{ fontSize: 26, fontWeight: 700 }}>{fmt(adaptive.tdee)} cal</div>
       <div style={{ fontSize: 11.5, color: COLORS.creamDim, marginTop: 2 }}>
-        vs {fmt(formulaTdee)} cal from the formula — {diff >= 0 ? "+" : ""}{fmt(diff)} cal
+        vs {fmt(formulaTdee)} cal from your profile stats — {diff >= 0 ? "+" : ""}{fmt(diff)} cal
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${COLORS.border}` }}>
         <div>
@@ -4203,18 +4219,23 @@ function AdaptiveTdeeCard({ adaptive, profile, onProfileChange }) {
         Based on {adaptive.validDaysFirstHalf + adaptive.validDaysSecondHalf} logged days over the last {adaptive.windowDays}.
         {isActive && profile.adaptiveTdeeSetOn && ` Adopted ${prettyDate(profile.adaptiveTdeeSetOn)}.`}
       </div>
+      {isActive && (
+        <div style={{ fontSize: 10, color: COLORS.creamDim, marginTop: 4 }}>
+          Refreshes on its own at most every 3 days as you log — tap Update to latest for the newest number right now.
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         {!isActive ? (
-          <button className="ft-btn ft-btn-primary" style={{ flex: 1 }} onClick={() => onProfileChange({ adaptiveTdee: adaptive.tdee, adaptiveTdeeSetOn: todayStr() })}>
+          <button className="ft-btn ft-btn-primary" style={{ flex: 1 }} onClick={() => onProfileChange({ adaptiveTdee: adaptive.tdee, adaptiveTdeeSetOn: todayStr(), adaptiveTdeeUpdatedAt: new Date().toISOString() })}>
             Use this as my TDEE
           </button>
         ) : (
           <>
-            <button className="ft-btn ft-btn-primary" style={{ flex: 1 }} onClick={() => onProfileChange({ adaptiveTdee: adaptive.tdee, adaptiveTdeeSetOn: todayStr() })}>
+            <button className="ft-btn ft-btn-primary" style={{ flex: 1 }} onClick={() => onProfileChange({ adaptiveTdee: adaptive.tdee, adaptiveTdeeSetOn: todayStr(), adaptiveTdeeUpdatedAt: new Date().toISOString() })}>
               Update to latest
             </button>
-            <button className="ft-btn ft-btn-ghost" onClick={() => onProfileChange({ adaptiveTdee: null, adaptiveTdeeSetOn: null })}>
-              Revert to formula
+            <button className="ft-btn ft-btn-ghost" onClick={() => onProfileChange({ adaptiveTdee: null, adaptiveTdeeSetOn: null, adaptiveTdeeUpdatedAt: null })}>
+              Use formula instead
             </button>
           </>
         )}

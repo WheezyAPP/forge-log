@@ -674,9 +674,22 @@ export function calcAttendanceGrade(splitId, workoutSessions, splitStartedOn) {
   const d = new Date(start);
   while (d <= today) {
     const pi = (d.getDay() + 6) % 7; // Mon=0
-    if (split.pattern[pi] !== "Rest") {
+    const ds = localDateStr(d);
+    const scheduledTraining = split.pattern[pi] !== "Rest";
+    const trained = sessionDates.has(ds);
+    // A logged session always counts as a training day, even on a
+    // calendar Rest day — that's exactly what the Optional Day (4th
+    // schedule slot) is for: choosing to train on a day the rotation
+    // didn't originally assign. Previously, actual++ only ran inside the
+    // "scheduled training" branch, so an Optional Day workout logged on
+    // a Rest day was invisible to both counts — it didn't help the grade
+    // at all, which felt like the day just didn't register anywhere.
+    // Counting it as both expected and actual together means it can't
+    // artificially inflate the percentage past 100% for that day either
+    // — it's treated as one more day you chose to train, and you hit it.
+    if (scheduledTraining || trained) {
       expected++;
-      if (sessionDates.has(localDateStr(d))) actual++;
+      if (trained) actual++;
     }
     d.setDate(d.getDate() + 1);
   }
@@ -771,7 +784,13 @@ function relativeDay(dateStr) {
 // logged (session count grows past it), so it never nags forever.
 export function getProgressionSuggestion(exerciseSessions, group, exerciseName, dismissedAtCount = null) {
   if (!exerciseSessions?.length) return null;
-  const sorted = [...exerciseSessions].sort((a, b) => a.date.localeCompare(b.date));
+  // date alone can't distinguish two sessions of the same exercise
+  // logged on the same calendar day — createdAt (when available) breaks
+  // the tie in real chronological order instead of leaving it to
+  // whatever order the sessions happened to arrive in.
+  const sorted = [...exerciseSessions].sort((a, b) =>
+    a.date.localeCompare(b.date) || (a.createdAt || "").localeCompare(b.createdAt || "")
+  );
   const last = sorted[sorted.length - 1];
   const filled = (last.sets || []).filter(s => parseFloat(s.weight) > 0 && parseInt(s.reps) > 0);
   if (filled.length < 3) return null; // need at least 3 logged sets to suggest anything
