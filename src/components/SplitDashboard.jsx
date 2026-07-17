@@ -16,7 +16,7 @@ import {
 import { EXERCISE_LINKS } from "../overload/exerciseLinks";
 import { toastError } from "../lib/toast";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 
 const DAY_NAMES = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -106,6 +106,8 @@ function saveDismissed(userId, obj) {
   try { localStorage.setItem(`forge_dismissed_deloads_${userId}`, JSON.stringify(obj)); } catch {}
 }
 
+const PR_LABELS = { e1RM: "Est. 1RM", volume: "Volume", weight: "Top weight" };
+
 function computePRFlags(sessions) {
   // Same-day duplicates need a real chronological tiebreak — id used to
   // be used for this, but ids are random UUIDs, not chronologically
@@ -142,6 +144,9 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   const [blocks, setBlocks] = useState([]);
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
+  // Ported from OverloadLog (now retired) — [{exercise, prTypes}], shown
+  // as a celebration banner right after a save that beat a prior best.
+  const [justSavedPRs, setJustSavedPRs] = useState([]);
   const [selectedLift, setSelectedLift] = useState(null);
   const [dismissed, setDismissed] = useState(() => loadDismissed(userId));
   const [swapOpen, setSwapOpen] = useState(null);
@@ -262,8 +267,9 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     buildDayBlocks(day);
     setView("day");
     setJustSaved(false);
+    setJustSavedPRs([]);
   }
-  function openAdhoc(day) { setDayOffset(day.i); setBlocks([]); setView("day"); setJustSaved(false); }
+  function openAdhoc(day) { setDayOffset(day.i); setBlocks([]); setView("day"); setJustSaved(false); setJustSavedPRs([]); }
 
   // "Follow my partner" — always today, since this only makes sense for
   // a live joint session, not planning out someone else's future days.
@@ -288,6 +294,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     }));
     setView("day");
     setJustSaved(false);
+    setJustSavedPRs([]);
   }
 
   // The 4th schedule slot is always "Optional Day" rather than whatever
@@ -302,6 +309,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     buildDayBlocks({ ...day, dayType: dayTypeName, isRest: false, def, occ: 0 });
     setView("day");
     setJustSaved(false);
+    setJustSavedPRs([]);
     setOptionalDayPickerOpen(null);
   }
 
@@ -469,7 +477,16 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       }));
     const saved = toInsert.length ? await insertWorkoutSessions(userId, toInsert) : [];
 
-    setWorkoutSessions([...workoutSessions.filter(s => !(s.date === dateKey && s.splitId === userSplitId)), ...saved]);
+    const nextSessions = [...workoutSessions.filter(s => !(s.date === dateKey && s.splitId === userSplitId)), ...saved];
+    setWorkoutSessions(nextSessions);
+    // Checked against the FULL updated history (not just today's blocks),
+    // same logic the History tab's PR badges use — a session only counts
+    // as a PR if it beats everything that came before it.
+    const flags = computePRFlags(nextSessions);
+    const prs = saved
+      .filter(s => flags[s.id]?.isPR)
+      .map(s => ({ exercise: s.exercise, prTypes: flags[s.id].prTypes }));
+    setJustSavedPRs(prs);
     setSaving(false);
     setJustSaved(true);
   }
@@ -872,6 +889,15 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                   {isDeload && <button onClick={() => dismissDeload(b.exercise, bi)} style={{ background:"none", border:"none", color:accent, cursor:"pointer", fontSize:10, textDecoration:"underline", whiteSpace:"nowrap" }}>not stalled</button>}
                 </div>
               )}
+              {/* Early warning before the deload suggestion actually
+                  appears — previously a deload showed up fully-formed on
+                  session 3 with zero lead-up, which felt like it came out
+                  of nowhere. This surfaces "2 of 3" one session earlier. */}
+              {b.sugg && !isDeload && b.sugg.stalledStreak === 2 && (
+                <div style={{ fontSize:10, color:C.creamDim, marginTop:-4, marginBottom:8 }}>
+                  2 of 3 sessions stalled at this weight — one more and this'll suggest a deload.
+                </div>
+              )}
               {BODYWEIGHT_LOADED_EXERCISES.has(b.exercise) && !isAssistedBodyweight(b.exercise) && (
                 <div style={{ fontSize:10, color:C.creamDim, marginBottom:8 }}>
                   {latestWeight ? `Using your logged weight (${Math.round(latestWeight * 10) / 10} lbs) — edit any set's weight if you're adding load.` : "Log your weight in Daily Log to auto-fill bodyweight here."}
@@ -963,6 +989,21 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         <div style={{ fontSize:11, color:C.creamDim, marginBottom:10 }}>{completed} of {blocks.length} exercises have data — you can save with just what you finished.</div>
         <button className="ft-btn ft-btn-primary" onClick={handleSaveDay} disabled={saving}><Zap size={13}/> {saving ? "Saving…" : "Save workout"}</button>
         {justSaved && <span style={{ marginLeft:10, fontSize:12, color:C.lime, display:"inline-flex", alignItems:"center", gap:4 }}><Check size={13}/> Saved — day marked done</span>}
+
+        {justSavedPRs.length > 0 && (
+          <div style={{ display:"flex", alignItems:"flex-start", gap:10, marginTop:10, padding:"12px 14px", borderRadius:10, background:"linear-gradient(135deg, rgba(240,192,64,.18), rgba(240,192,64,.06))", border:`1px solid ${C.ember}` }}>
+            <Trophy size={18} color={C.ember} style={{ flexShrink:0, marginTop:1 }} />
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:800, color:C.ember, marginBottom:3 }}>NEW PR{justSavedPRs.length > 1 ? "s" : ""}!</div>
+              {justSavedPRs.map((pr, i) => (
+                <div key={i} style={{ fontSize:12, color:C.cream, marginBottom:2 }}>
+                  <span style={{ fontWeight:700 }}>{pr.exercise}</span> — new best {pr.prTypes.map(t => PR_LABELS[t]).join(" & ")}
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setJustSavedPRs([])} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer", padding:4 }}><XIcon size={14}/></button>
+          </div>
+        )}
 
         {offSplitPickerOpen && (() => {
           const q = offSplitSearch.trim().toLowerCase();
@@ -1143,17 +1184,26 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   if (view === "lift") {
     const h = historyByExercise.find(x => x.exercise === selectedLift);
     if (!h) { setView("history"); return null; }
-    const chartData = h.sessions.map(s => ({ date: s.date.slice(5), e1rm: sessionBest1RM(s.sets) }));
+    const chartData = h.sessions.map(s => ({ date: s.date.slice(5), e1rm: sessionBest1RM(s.sets), volume: sessionVolume(s.sets) }));
     const avgW = Math.round(h.sessions.reduce((s,x) => s + (x.sets[0]?.weight||0), 0) / h.sessions.length);
+    // Only counted across sets that actually have an RPE logged — most
+    // exercises won't, if Dedicated Progressive Overload has never been
+    // on, and this stat just quietly doesn't appear for those rather
+    // than showing a misleading 0.
+    const rpeValues = h.sessions.flatMap(s => (s.sets || []).map(set => parseFloat(set.rpe)).filter(v => !Number.isNaN(v) && v > 0));
+    const avgRpe = rpeValues.length ? Math.round((rpeValues.reduce((a,b) => a+b, 0) / rpeValues.length) * 10) / 10 : null;
     return (
       <div>
         <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("history")}><ArrowLeft size={13}/> Back to lifts</button>
         <div style={{ fontSize:16, fontWeight:700 }}>{h.exercise}</div>
         <div style={{ fontSize:11, color:C.ember, marginBottom:12 }}>{h.grp}</div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:14 }}>
+        <div style={{ display:"grid", gridTemplateColumns: avgRpe != null ? "repeat(4,1fr)" : "repeat(3,1fr)", gap:8, marginBottom:14 }}>
           <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Best e1RM</div><div style={{ fontSize:16, fontWeight:800, color:C.ember }}>{fmtN(h.best)} lbs</div></div>
           <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Avg weight</div><div style={{ fontSize:16, fontWeight:800 }}>{fmtN(avgW)} lbs</div></div>
           <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Sessions</div><div style={{ fontSize:16, fontWeight:800 }}>{h.sessions.length}</div></div>
+          {avgRpe != null && (
+            <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Avg RPE</div><div style={{ fontSize:16, fontWeight:800, color: avgRpe >= 9 ? C.warn : C.cream }}>{avgRpe}</div></div>
+          )}
         </div>
         {chartData.length > 1 && (
           <div className="ft-card" style={{ padding:14, marginBottom:12 }}>
@@ -1166,6 +1216,20 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                 <Tooltip contentStyle={{ background:C.raised, border:`1px solid ${C.border}`, color:C.cream }} />
                 <Line type="monotone" dataKey="e1rm" stroke={C.ember} strokeWidth={2} dot={{ r:3 }} />
               </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+        {chartData.length > 1 && (
+          <div className="ft-card" style={{ padding:14, marginBottom:12 }}>
+            <div style={{ fontSize:11, color:C.creamDim, marginBottom:6 }}>Session volume (sets × reps × weight)</div>
+            <ResponsiveContainer width="100%" height={160}>
+              <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="date" stroke={C.creamDim} fontSize={10} />
+                <YAxis stroke={C.creamDim} fontSize={10} />
+                <Tooltip contentStyle={{ background:C.raised, border:`1px solid ${C.border}`, color:C.cream }} />
+                <Bar dataKey="volume" fill={C.ember} radius={[4,4,4,4]} />
+              </BarChart>
             </ResponsiveContainer>
           </div>
         )}
@@ -1191,7 +1255,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                       className="ft-mono"
                       style={{ fontSize:11, padding:"3px 8px", borderRadius:999, background:C.raised, border:`1px solid ${C.border}`, color:C.cream }}
                     >
-                      {fmtN(parseFloat(set.weight) || 0)} lbs × {parseInt(set.reps) || 0} reps
+                      {fmtN(parseFloat(set.weight) || 0)} lbs × {parseInt(set.reps) || 0} reps{set.rpe != null && set.rpe > 0 ? ` @ RPE ${set.rpe}` : ""}
                     </span>
                   ))}
                 </div>

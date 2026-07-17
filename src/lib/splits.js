@@ -846,27 +846,53 @@ export function getProgressionSuggestion(exerciseSessions, group, exerciseName, 
   const rpe = dedicatedMode ? parseFloat(filled[0].rpe) : NaN;
   const hasRpe = !Number.isNaN(rpe) && rpe > 0;
 
-  const dismissActive = dismissedAtCount != null && sorted.length <= dismissedAtCount;
-  if (!dismissActive && sorted.length >= 3) {
-    const recent = sorted.slice(-3);
-    const stalled = recent.every(sess => {
+  // How many CONSECUTIVE trailing sessions already match the stall
+  // condition (same weight, hasn't hit the rep ceiling) — walking
+  // backward from most recent and stopping at the first session that
+  // breaks the streak. This is the same check the deload trigger below
+  // uses (streak >= 3), just exposed as a count rather than a yes/no, so
+  // the UI can show "2 of 3 sessions stalled" building up to it instead
+  // of the deload suggestion appearing with no warning on session 3.
+  let stalledStreak = 0;
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const f = (sorted[i].sets || []).filter(s => parseFloat(s.weight) > 0 && parseInt(s.reps) > 0);
+    if (f.length < 3) break;
+    const w = parseFloat(f[0].weight) || 0;
+    const hitTop = f.every(s => (parseInt(s.reps) || 0) >= range[1]);
+    if (w === weight && !hitTop) stalledStreak++;
+    else break;
+  }
+
+  // RPE-aware early trigger: two consecutive sessions grinding at RPE 9+
+  // is a strong stall signal on its own, even while reps are still
+  // technically climbing — catching a real problem sooner than the
+  // rep-only streak above would notice on its own. Only ever consulted
+  // when Dedicated Progressive Overload is on, same as everywhere else
+  // RPE factors in.
+  let effortStalled = false;
+  if (dedicatedMode && sorted.length >= 2) {
+    effortStalled = sorted.slice(-2).every(sess => {
       const f = (sess.sets || []).filter(s => parseFloat(s.weight) > 0 && parseInt(s.reps) > 0);
       if (f.length < 3) return false;
-      const w = parseFloat(f[0].weight) || 0;
-      const hitTop = f.every(s => (parseInt(s.reps) || 0) >= range[1]);
-      return w === weight && !hitTop;
+      const r = parseFloat(f[0].rpe);
+      return !Number.isNaN(r) && r >= 9;
     });
-    if (stalled) {
-      const deloadWeight = Math.round((weight * 0.9) / increment) * increment;
-      return {
-        type: "deload",
-        suggestedWeight: deloadWeight,
-        targetReps: range[0],
-        ago, lastWeight: weight, lastReps: minReps,
-        sessionCount: sorted.length,
-        msg: `Stalled at ${weight} lbs for 3 sessions in a row — deload to ${deloadWeight} lbs and build back up.`,
-      };
-    }
+  }
+
+  const dismissActive = dismissedAtCount != null && sorted.length <= dismissedAtCount;
+  if (!dismissActive && (stalledStreak >= 3 || effortStalled)) {
+    const deloadWeight = Math.round((weight * 0.9) / increment) * increment;
+    return {
+      type: "deload",
+      suggestedWeight: deloadWeight,
+      targetReps: range[0],
+      ago, lastWeight: weight, lastReps: minReps,
+      sessionCount: sorted.length,
+      stalledStreak,
+      msg: effortStalled && stalledStreak < 3
+        ? `RPE 9+ for 2 sessions straight at ${weight} lbs — deload to ${deloadWeight} lbs and build back up.`
+        : `Stalled at ${weight} lbs for 3 sessions in a row — deload to ${deloadWeight} lbs and build back up.`,
+    };
   }
 
   if (allAtTop) {
@@ -880,7 +906,7 @@ export function getProgressionSuggestion(exerciseSessions, group, exerciseName, 
         suggestedWeight: weight,
         targetReps: range[1],
         ago, lastWeight: weight, lastReps: minReps,
-        sessionCount: sorted.length,
+        sessionCount: sorted.length, stalledStreak,
         msg: `Hit ${range[1]} reps ${ago}, but RPE ${rpe} was near max effort — hold at ${weight} lbs until it feels easier.`,
       };
     }
@@ -893,7 +919,7 @@ export function getProgressionSuggestion(exerciseSessions, group, exerciseName, 
       suggestedWeight: weight + bigJump,
       targetReps: range[0],
       ago, lastWeight: weight, lastReps: minReps,
-      sessionCount: sorted.length,
+      sessionCount: sorted.length, stalledStreak,
       msg: hasRpe && rpe <= 7
         ? `Hit ${range[1]} reps at only RPE ${rpe} ${ago} — plenty in reserve, add ${bigJump} lbs and back to ${range[0]} reps.`
         : `Hit ${range[1]} reps on all sets ${ago} — add ${increment} lbs, back to ${range[0]} reps.`,
@@ -905,7 +931,7 @@ export function getProgressionSuggestion(exerciseSessions, group, exerciseName, 
     suggestedWeight: weight,
     targetReps: nextReps,
     ago, lastWeight: weight, lastReps: minReps,
-    sessionCount: sorted.length,
+    sessionCount: sorted.length, stalledStreak,
     msg: `Same weight — aim for ${nextReps} reps per set (last: ${filled.map(s => s.reps).join("/")}, ${ago}).`,
   };
 }

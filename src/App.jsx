@@ -43,6 +43,7 @@ import {
   BookmarkPlus,
   Users,
   Download,
+  Upload,
   Info,
   ClipboardCheck,
   Layers,
@@ -1039,6 +1040,39 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
     return merged;
   }
 
+  // Counterpart to Export your data (CSV) in Settings. The export is
+  // intentionally lossy for two columns — "Weigh-ins" and "Meals logged"
+  // are counts, not the underlying records — so import only restores the
+  // day-level fields that actually round-trip: weight, calories, macros,
+  // creatine, body fat %, and a single water total. It merges into
+  // whatever's already saved for each date rather than replacing it, so
+  // existing measurements/weigh-ins/meals for that day are untouched —
+  // only the fields present in the CSV change. Optimistic update first
+  // (immediate feedback for a bulk operation), persisted in parallel.
+  async function handleImportCsv(rows) {
+    const next = { ...entries };
+    for (const row of rows) {
+      const existing = next[row.date] || {};
+      const partial = {};
+      if (row.weight != null) partial.weight = row.weight;
+      if (row.caloriesConsumed != null) partial.caloriesConsumed = row.caloriesConsumed;
+      if (row.protein != null) partial.protein = row.protein;
+      if (row.carbs != null) partial.carbs = row.carbs;
+      if (row.fat != null) partial.fat = row.fat;
+      if (row.creatine != null) partial.creatine = row.creatine;
+      if (row.bodyFatPct != null) partial.bodyFatPct = row.bodyFatPct;
+      if (row.waterOz != null) {
+        partial.water_logs = [{
+          id: (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          time: null, amountOz: row.waterOz, imported: true,
+        }];
+      }
+      next[row.date] = { ...existing, ...partial };
+    }
+    setEntries(next);
+    await Promise.all(rows.map(row => saveEntry(userId, row.date, next[row.date])));
+  }
+
   async function handleSave() {
     if (!weightInput || !caloriesInput) return;
     const weight = clampPositive(weightInput);
@@ -1535,7 +1569,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
       {tab === "trends" && <Trends chartData={chartData} workoutSessions={workoutSessions} showLifts={features.train} showWater={features.water} profile={profile} />}
 
-      {tab === "settings" && <SettingsPanel profile={profile} onChange={handleProfileChange} latestWeight={latestEntry?.weight ?? null} features={features} onToggleFeature={handleToggleFeature} entries={entries} />}
+      {tab === "settings" && <SettingsPanel profile={profile} onChange={handleProfileChange} latestWeight={latestEntry?.weight ?? null} features={features} onToggleFeature={handleToggleFeature} entries={entries} onImportCsv={handleImportCsv} />}
       </div>
     </div>
 
@@ -4198,7 +4232,7 @@ function AdaptiveTdeeCard({ adaptive, profile, onProfileChange }) {
 
   const diff = adaptive.tdee - formulaTdee;
   return (
-    <div className="ft-card ft-card-hero" style={{ padding: 18, maxWidth: 380, flex: 1, minWidth: 280 }}>
+    <div className={`ft-card ${isActive ? "ft-card-hero" : ""}`} style={{ padding: 18, maxWidth: 380, flex: 1, minWidth: 280 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, flexWrap: "wrap", gap: 6 }}>
         <div className="ft-label" style={{ marginBottom: 0 }}>Adaptive TDEE</div>
         {isActive && <span style={{ fontSize: 10, fontWeight: 700, color: COLORS.mint, background: COLORS.mintDim, padding: "3px 8px", borderRadius: 999 }}>ACTIVE</span>}
@@ -4283,7 +4317,7 @@ function AdaptiveBodyFatCard({ profile, entries, latestWeight, onProfileChange }
   const blendedPct = 0.65 * stats.formulaBodyFatPct + 0.35 * stats.navyBodyFatPct;
   const diff = blendedPct - stats.formulaBodyFatPct;
   return (
-    <div className="ft-card ft-card-hero" style={cardStyle}>
+    <div className={`ft-card ${isActive ? "ft-card-hero" : ""}`} style={cardStyle}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, flexWrap: "wrap", gap: 6 }}>
         <div className="ft-label" style={{ marginBottom: 0 }}>Adaptive Body Fat %</div>
         {isActive && <span style={{ fontSize: 10, fontWeight: 700, color: COLORS.mint, background: COLORS.mintDim, padding: "3px 8px", borderRadius: 999 }}>ACTIVE</span>}
@@ -4324,8 +4358,105 @@ function AdaptiveBodyFatCard({ profile, entries, latestWeight, onProfileChange }
    Settings
 ----------------------------------------------------------------*/
 
-function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeature, entries }) {
+// Minimal RFC4180-ish CSV parser matching the quoting style
+// handleExportCsv produces (every cell quoted, internal quotes doubled) —
+// handles CRLF and bare LF line endings since spreadsheet apps vary on
+// save. Not a general-purpose CSV library, just enough to round-trip
+// what this app itself exports.
+function parseCsvText(text) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ",") { row.push(field); field = ""; }
+      else if (c === "\r") { /* skip — \n handles the actual line break */ }
+      else if (c === "\n") { row.push(field); field = ""; if (row.some(v => v !== "")) rows.push(row); row = []; }
+      else field += c;
+    }
+  }
+  if (field !== "" || row.length) { row.push(field); if (row.some(v => v !== "")) rows.push(row); }
+  return rows;
+}
+
+// "Weigh-ins" and "Meals logged" are deliberately absent here — the
+// export only ever writes a COUNT for those two columns, not the
+// underlying records, so there's nothing to reconstruct from them on
+// the way back in.
+const IMPORT_COLUMN_MAP = {
+  "Weight (lbs)": "weight",
+  "Calories": "caloriesConsumed",
+  "Protein (g)": "protein",
+  "Carbs (g)": "carbs",
+  "Fat (g)": "fat",
+  "Creatine (g)": "creatine",
+  "Body Fat %": "bodyFatPct",
+  "Water (oz)": "waterOz",
+};
+
+function parseImportCsv(text) {
+  const raw = parseCsvText(text);
+  if (raw.length < 2) return { rows: [], errors: ["File is empty or has no data rows."] };
+  const header = raw[0];
+  const dateIdx = header.indexOf("Date");
+  if (dateIdx === -1) return { rows: [], errors: ['No "Date" column found — this doesn\'t look like a Forge Log export.'] };
+
+  const fieldIdx = {};
+  header.forEach((h, i) => { if (IMPORT_COLUMN_MAP[h] != null) fieldIdx[IMPORT_COLUMN_MAP[h]] = i; });
+
+  const rows = [];
+  const errors = [];
+  for (let r = 1; r < raw.length; r++) {
+    const cells = raw[r];
+    const date = cells[dateIdx];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "")) { errors.push(`Row ${r + 1}: skipped — "${date}" isn't a valid date.`); continue; }
+    const parsed = { date };
+    for (const [field, idx] of Object.entries(fieldIdx)) {
+      const v = cells[idx];
+      if (v === undefined || v === "") continue;
+      const num = parseFloat(v);
+      if (!Number.isNaN(num)) parsed[field] = num;
+    }
+    rows.push(parsed);
+  }
+  return { rows, errors };
+}
+
+function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeature, entries, onImportCsv }) {
   const adaptive = useMemo(() => computeAdaptiveTDEE(entries), [entries]);
+  const [importPreview, setImportPreview] = useState(null); // { rows, errors, fileName }
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef(null);
+
+  function handleFileSelected(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // clears the picker so re-selecting the same file still fires onChange
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const { rows, errors } = parseImportCsv(String(reader.result));
+      setImportPreview({ rows, errors, fileName: file.name });
+    };
+    reader.readAsText(file);
+  }
+
+  async function handleConfirmImport() {
+    if (!importPreview?.rows?.length) return;
+    setImporting(true);
+    try {
+      await onImportCsv(importPreview.rows);
+      toastSuccess(`Imported ${importPreview.rows.length} day${importPreview.rows.length !== 1 ? "s" : ""}`);
+      setImportPreview(null);
+    } finally {
+      setImporting(false);
+    }
+  }
 
   function handleExportCsv() {
     const dates = Object.keys(entries).sort();
@@ -4365,6 +4496,7 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
   }
 
   const rate = profile.goalRateLbsPerWeek || 0;
+  const formulaTdee = computeStats(profile, latestWeight || FALLBACK_WEIGHT_ESTIMATE_LBS).tdee;
   let dailyAdj = 0;
   if (profile.goalType === "lose") dailyAdj = -(rate * 3500) / 7;
   else if (profile.goalType === "gain") dailyAdj = (rate * 3500) / 7;
@@ -4387,8 +4519,8 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
   return (
     <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
       <div className="ft-card" style={{ padding: 20, maxWidth: 460, flex: 1, minWidth: 300 }}>
-        <div className="ft-label" style={{ marginBottom: 14 }}>Profile — used for TDEE & calorie burn formulas</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div className="ft-label" style={{ marginBottom: 14 }}>Profile</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Field label="Gender">
             <select className="ft-select" value={profile.gender} onChange={(e) => onChange("gender", e.target.value)}>
               <option value="male">Male</option>
@@ -4398,17 +4530,23 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
           <Field label="Age">
             <input className="ft-input" type="number" inputMode="decimal" onFocus={selectOnFocus} value={profile.age} onChange={(e) => onChange("age", parseFloat(e.target.value) || 0)} />
           </Field>
-          <Field label="Height (inches)">
+          <Field label="Height (in)">
             <input className="ft-input" type="number" inputMode="decimal" onFocus={selectOnFocus} value={profile.heightIn} onChange={(e) => onChange("heightIn", parseFloat(e.target.value) || 0)} />
           </Field>
-          <Field label="Activity level">
+          <Field label="Activity">
             <select className="ft-select" value={profile.activityIdx} onChange={(e) => onChange("activityIdx", parseInt(e.target.value))}>
               {ACTIVITY_LEVELS.map((a, i) => <option key={i} value={i}>{a.label}</option>)}
             </select>
           </Field>
         </div>
-        <div style={{ marginTop: 16, fontSize: 12, color: COLORS.creamDim, lineHeight: 1.5 }}>
-          Maintenance calories use the Mifflin-St Jeor formula × activity multiplier. Macro targets are built from your goal intake (not maintenance): protein ~1g/lb, fat 25% of intake calories (staying inside the 20-30% band that supports hormones and training), carbs fill the remainder. Body fat % is estimated from a BMI-based formula (BMI, age, gender) — a rough estimate, not a substitute for a real body composition scan.
+        <div className="ft-card-raised" style={{ marginTop: 16, padding: 12 }}>
+          <Row label="Maintenance (TDEE)" value={`${fmt(formulaTdee)} cal`} bold />
+          <div style={{ fontSize: 10.5, color: COLORS.creamDim, marginTop: 4, lineHeight: 1.4 }}>
+            Mifflin-St Jeor BMR × activity multiplier{latestWeight == null ? " — using an estimated weight, log a weigh-in for an exact number" : ""}. Adaptive TDEE below can override this once you've logged enough days.
+          </div>
+        </div>
+        <div style={{ marginTop: 12, fontSize: 11.5, color: COLORS.creamDim, lineHeight: 1.5 }}>
+          Macro targets come from your goal intake, not maintenance: protein ~1g/lb, fat 25% of calories, carbs fill the rest. Body fat % is a BMI-based estimate — not a substitute for a real scan.
         </div>
       </div>
 
@@ -4545,17 +4683,49 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
             onChange={(e) => onChange("goalWeightLbs", e.target.value ? parseFloat(e.target.value) : null)}
           />
         </Field>
-        <div style={{ marginTop: 10, fontSize: 12, color: COLORS.creamDim, lineHeight: 1.5 }}>
-          Shown on your Dashboard with progress toward this number and an estimated timeline based on your current rate. Leave blank to hide it.
-        </div>
+        {profile.goalWeightLbs ? (
+          latestWeight != null ? (() => {
+            const diff = profile.goalWeightLbs - latestWeight;
+            const absDiff = Math.abs(diff);
+            const reached = absDiff < 0.5;
+            const weeksEst = !reached && rate > 0 ? Math.ceil(absDiff / rate) : null;
+            return (
+              <div className="ft-card-raised" style={{ marginTop: 12, padding: 12 }}>
+                {reached ? (
+                  <div style={{ fontSize: 12.5, color: COLORS.mint, fontWeight: 700 }}>You're at your goal weight!</div>
+                ) : (
+                  <>
+                    <Row label={diff < 0 ? "Lbs to lose" : "Lbs to gain"} value={fmt(absDiff, 1)} bold />
+                    <div style={{ fontSize: 11, color: COLORS.creamDim, marginTop: 4, lineHeight: 1.4 }}>
+                      {weeksEst != null
+                        ? `~${weeksEst} week${weeksEst !== 1 ? "s" : ""} at your current rate of ${fmt(rate, 2)} lbs/week.`
+                        : "Set a weekly rate on your Weight goal to see an estimated timeline."}
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })() : (
+            <div style={{ marginTop: 10, fontSize: 11.5, color: COLORS.creamDim, lineHeight: 1.4 }}>
+              Log a weigh-in to see your progress toward this.
+            </div>
+          )
+        ) : (
+          <div style={{ marginTop: 10, fontSize: 12, color: COLORS.creamDim, lineHeight: 1.5 }}>
+            Shown on your Dashboard with progress toward this number and an estimated timeline based on your current rate. Leave blank to hide it.
+          </div>
+        )}
       </div>
 
       <AdaptiveTdeeCard adaptive={adaptive} profile={profile} onProfileChange={onChange} />
 
-      <div className="ft-card" style={{ padding: 18, maxWidth: 380, flex: 1, minWidth: 280 }}>
+      <div className={`ft-card ${isBodyFatVisible(profile) ? "ft-card-hero" : ""}`} style={{ padding: 18, maxWidth: 380, flex: 1, minWidth: 280 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="ft-label" style={{ marginBottom: 2 }}>Show body fat %</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 2 }}>
+              <div className="ft-label" style={{ marginBottom: 0 }}>Show body fat %</div>
+              {isBodyFatVisible(profile) && <span style={{ fontSize: 10, fontWeight: 700, color: COLORS.mint, background: COLORS.mintDim, padding: "3px 8px", borderRadius: 999 }}>ACTIVE</span>}
+            </div>
             <div style={{ fontSize: 11.5, color: COLORS.creamDim, lineHeight: 1.4 }}>
               Hides body fat %, fat mass, and lean mass everywhere in the app — Dashboard, Daily Log, and Trends. This can be sensitive information, so it defaults to hidden for female profiles and shown for male; either way it's your call.
             </div>
@@ -4586,9 +4756,12 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
         <AdaptiveBodyFatCard profile={profile} entries={entries} latestWeight={latestWeight} onProfileChange={onChange} />
       )}
 
-      <div className="ft-card" style={{ padding: 20, maxWidth: 380, flex: 1, minWidth: 280 }}>
+      <div className={`ft-card ${profile.dedicatedProgressiveOverload ? "ft-card-hero" : ""}`} style={{ padding: 20, maxWidth: 380, flex: 1, minWidth: 280 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
-          <div className="ft-label" style={{ marginBottom: 0 }}>Dedicated Progressive Overload</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div className="ft-label" style={{ marginBottom: 0 }}>Dedicated Progressive Overload</div>
+            {profile.dedicatedProgressiveOverload && <span style={{ fontSize: 10, fontWeight: 700, color: COLORS.mint, background: COLORS.mintDim, padding: "3px 8px", borderRadius: 999 }}>ACTIVE</span>}
+          </div>
           <button
             role="switch"
             aria-checked={!!profile.dedicatedProgressiveOverload}
@@ -4663,6 +4836,47 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
         </button>
         {Object.keys(entries).length === 0 && (
           <div style={{ fontSize: 11, color: COLORS.creamDim, marginTop: 8 }}>Log a few days first — nothing to export yet.</div>
+        )}
+      </div>
+
+      <div className="ft-card" style={{ padding: 20, maxWidth: 380, flex: 1, minWidth: 280 }}>
+        <div className="ft-label" style={{ marginBottom: 4 }}>Import data</div>
+        <div style={{ fontSize: 12, color: COLORS.creamDim, lineHeight: 1.5, marginBottom: 14 }}>
+          Restore from a Forge Log CSV export. Merges into existing days rather than replacing them — only weight, calories, macros, creatine, body fat %, and a water total round-trip; per-meal and per-weigh-in detail isn't in the export, so those aren't recreated.
+        </div>
+        <input ref={importInputRef} type="file" accept=".csv" style={{ display: "none" }} onChange={handleFileSelected} />
+        <button className="ft-btn ft-btn-ghost" onClick={() => importInputRef.current?.click()}>
+          <Upload size={14} /> Choose CSV file
+        </button>
+
+        {importPreview && (
+          <div className="ft-card-raised" style={{ marginTop: 14, padding: 12 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.cream, marginBottom: 4 }}>{importPreview.fileName}</div>
+            {importPreview.rows.length === 0 ? (
+              <div style={{ fontSize: 12, color: COLORS.warn }}>
+                No usable rows found.{importPreview.errors[0] ? ` ${importPreview.errors[0]}` : ""}
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: COLORS.creamDim, lineHeight: 1.5 }}>
+                  Ready to import <b style={{ color: COLORS.cream }}>{importPreview.rows.length}</b> day{importPreview.rows.length !== 1 ? "s" : ""}
+                  {" "}({prettyDate(importPreview.rows[0].date)} – {prettyDate(importPreview.rows[importPreview.rows.length - 1].date)}).
+                  {" "}{importPreview.rows.filter(r => entries[r.date]).length} of these already have data and will be updated, not replaced.
+                </div>
+                {importPreview.errors.length > 0 && (
+                  <div style={{ fontSize: 11, color: COLORS.amber, marginTop: 6 }}>
+                    {importPreview.errors.length} row{importPreview.errors.length !== 1 ? "s" : ""} skipped (bad date).
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button className="ft-btn ft-btn-primary" style={{ flex: 1 }} onClick={handleConfirmImport} disabled={importing}>
+                    {importing ? "Importing…" : "Confirm import"}
+                  </button>
+                  <button className="ft-btn ft-btn-ghost" onClick={() => setImportPreview(null)} disabled={importing}>Cancel</button>
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
     </div>
