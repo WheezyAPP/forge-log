@@ -1510,6 +1510,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
             gender={profile.gender}
             subTab={tab}
             setTab={setTab}
+            dedicatedProgressiveOverload={profile.dedicatedProgressiveOverload}
           />
         </>
       )}
@@ -1524,6 +1525,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
           setWorkoutSessions={setWorkoutSessions}
           latestWeight={latestEntry?.weight ?? null}
           gender={profile.gender}
+          dedicatedProgressiveOverload={profile.dedicatedProgressiveOverload}
           onSplitChange={handleSplitChange}
           onExit={() => setPartnerMode(false)}
         />
@@ -1756,7 +1758,7 @@ function buildCoachNotes({ e, stats, balance, avgBalance, weightDelta, proteinPc
     if (entries2.length) {
       const [exName, sessions] = entries2[0];
       const sorted = [...sessions].sort((a, b) => a.date.localeCompare(b.date));
-      const sugg = getProgressionSuggestion(sorted, sorted[sorted.length - 1].group, exName);
+      const sugg = getProgressionSuggestion(sorted, sorted[sorted.length - 1].group, exName, null, profile.dedicatedProgressiveOverload);
       if (sugg) {
         notes.push({ body: <><b>{exName}</b> — {sugg.msg}</>, target: "trainDay", cta: "View training" });
       }
@@ -4583,6 +4585,34 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
       {isBodyFatVisible(profile) && (
         <AdaptiveBodyFatCard profile={profile} entries={entries} latestWeight={latestWeight} onProfileChange={onChange} />
       )}
+
+      <div className="ft-card" style={{ padding: 20, maxWidth: 380, flex: 1, minWidth: 280 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
+          <div className="ft-label" style={{ marginBottom: 0 }}>Dedicated Progressive Overload</div>
+          <button
+            role="switch"
+            aria-checked={!!profile.dedicatedProgressiveOverload}
+            onClick={() => onChange("dedicatedProgressiveOverload", !profile.dedicatedProgressiveOverload)}
+            className="ft-btn-icon"
+            style={{
+              width: 44, height: 25, borderRadius: 999, border: "none", cursor: "pointer",
+              background: profile.dedicatedProgressiveOverload ? `linear-gradient(135deg, ${COLORS.ember}, ${COLORS.mint})` : COLORS.surfaceRaised,
+              position: "relative", flexShrink: 0, padding: 0, minWidth: 44, minHeight: 25,
+              transition: "background 0.25s ease",
+            }}
+          >
+            <span style={{
+              position: "absolute", top: 3, left: profile.dedicatedProgressiveOverload ? 22 : 3,
+              width: 19, height: 19, borderRadius: "50%", background: COLORS.cream,
+              transition: "left 0.22s cubic-bezier(0.16,1,0.3,1)",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
+            }} />
+          </button>
+        </div>
+        <div style={{ fontSize: 12, color: COLORS.creamDim, lineHeight: 1.5 }}>
+          Adds an RPE (1-10) field to every set in Daily Log, and weighs how hard your last session actually felt — not just whether you hit the top of the rep range — when suggesting your next weight. Hit the rep ceiling at a low RPE and it'll suggest a bigger jump than usual; hit it at RPE 9+ and it'll have you hold instead of piling on more. Off by default — the suggestion math is smarter either way, this just adds effort into the equation on top of that. Nothing you've already logged is affected either way.
+        </div>
+      </div>
 
       <div className="ft-card" style={{ padding: 20, maxWidth: 380, flex: 1, minWidth: 280 }}>
         <div className="ft-label" style={{ marginBottom: 4 }}>Features</div>

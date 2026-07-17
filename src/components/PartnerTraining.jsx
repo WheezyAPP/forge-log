@@ -45,7 +45,7 @@ function todayStr() {
 
 export default function PartnerTraining({
   userId, userName, userSplitId, splitStartedOn, workoutSessions, setWorkoutSessions,
-  latestWeight, gender, onSplitChange, onExit,
+  latestWeight, gender, dedicatedProgressiveOverload, onSplitChange, onExit,
 }) {
   const [allUsers, setAllUsers] = useState([]);
   const [partnerId, setPartnerId] = useState(null);
@@ -214,6 +214,7 @@ export default function PartnerTraining({
             subTab="trainDay"
             setTab={() => {}}
             onBlocksChange={setHostBlocks}
+            dedicatedProgressiveOverload={dedicatedProgressiveOverload}
           />
         </div>
         <div>
@@ -233,6 +234,7 @@ export default function PartnerTraining({
               subTab="trainDay"
               setTab={() => {}}
               followSource={hostBlocks}
+              dedicatedProgressiveOverload={partnerData.profile?.dedicatedProgressiveOverload}
             />
           )}
         </div>

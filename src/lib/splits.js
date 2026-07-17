@@ -782,7 +782,46 @@ function relativeDay(dateStr) {
 // dismissedAtCount: if the user dismissed a deload suggestion, the session
 // count at that time — the dismissal auto-expires once a new session is
 // logged (session count grows past it), so it never nags forever.
-export function getProgressionSuggestion(exerciseSessions, group, exerciseName, dismissedAtCount = null) {
+// Practical, plate-loadable weight increment for a specific exercise and
+// how much history the lifter has with it — real gyms don't sell 1.83 lb
+// plates, and a flat "+5 lbs" for every exercise in a muscle group
+// treats a 65 lb lift and a 405 lb lift identically, which isn't how
+// meaningful progress works at either end. The percentage itself scales
+// down as session count climbs — beginners can add aggressively,
+// longer-established lifts call for smaller, more sustainable jumps —
+// matching how every real progression guide treats a beginner
+// differently from an advanced lifter on the same movement.
+function practicalIncrement(exerciseName, group, weight, sessionCount) {
+  const pct = sessionCount < 8 ? 0.05 : sessionCount <= 20 ? 0.035 : 0.025;
+  const raw = weight * pct;
+
+  // Equipment type inferred from the exercise name itself (it's already
+  // right there in the string for the vast majority of entries) decides
+  // the rounding step; isolation-tier groups get the finer step within
+  // each equipment type, same as compound movements get the coarser one.
+  const name = exerciseName.toLowerCase();
+  const isIsolation = ["Biceps", "Triceps", "Abs & Core"].includes(group);
+  let step;
+  if (name.includes("dumbbell") || /\bdb\b/.test(name)) step = isIsolation ? 2.5 : 5;
+  else if (name.includes("barbell") && !name.includes("machine")) step = isIsolation ? 2.5 : 5;
+  else if (name.includes("machine") || name.includes("cable") || name.includes("smith") || name.includes("pulldown") || name.includes("iso-lateral") || name.includes("press") || name.includes("pin")) step = isIsolation ? 2.5 : 5;
+  else step = isIsolation ? 1.25 : 2.5; // unrecognized equipment pattern — same fallback the old flat increments used
+
+  let increment = Math.round(raw / step) * step;
+  if (increment < step) increment = step; // never suggest a zero-lb "increase"
+  return increment;
+}
+
+// dedicatedMode (Settings → Dedicated Progressive Overload) gates the
+// RPE/RIR autoregulation layer only — the percentage-based increment
+// math above is always active for everyone, on or off. When on, this
+// also expects the last session's sets to carry an `rpe` field (only
+// present when it was logged, which only happens once the person has
+// turned this on and started seeing the RPE input) and reads it from
+// the same "first counted set" that already anchors weight and reps for
+// the rest of this function, for one consistent primary-set signal
+// rather than an average across sets of different apparent difficulty.
+export function getProgressionSuggestion(exerciseSessions, group, exerciseName, dismissedAtCount = null, dedicatedMode = false) {
   if (!exerciseSessions?.length) return null;
   // date alone can't distinguish two sessions of the same exercise
   // logged on the same calendar day — createdAt (when available) breaks
@@ -801,10 +840,11 @@ export function getProgressionSuggestion(exerciseSessions, group, exerciseName, 
   const minReps = Math.min(...filled.map(s => parseInt(s.reps) || 0));
   const allAtTop = filled.every(s => (parseInt(s.reps) || 0) >= range[1]);
 
-  const isLower     = ["Quads", "Hamstrings/Glutes"].includes(group);
-  const isIsolation = ["Biceps", "Triceps", "Abs & Core"].includes(group);
-  const increment   = isLower ? 5 : isIsolation ? 1.25 : 2.5;
+  const increment = practicalIncrement(exerciseName, group, weight, sorted.length);
   const ago = relativeDay(last.date);
+
+  const rpe = dedicatedMode ? parseFloat(filled[0].rpe) : NaN;
+  const hasRpe = !Number.isNaN(rpe) && rpe > 0;
 
   const dismissActive = dismissedAtCount != null && sorted.length <= dismissedAtCount;
   if (!dismissActive && sorted.length >= 3) {
@@ -817,7 +857,7 @@ export function getProgressionSuggestion(exerciseSessions, group, exerciseName, 
       return w === weight && !hitTop;
     });
     if (stalled) {
-      const deloadWeight = Math.round((weight * 0.9) / 2.5) * 2.5;
+      const deloadWeight = Math.round((weight * 0.9) / increment) * increment;
       return {
         type: "deload",
         suggestedWeight: deloadWeight,
@@ -830,13 +870,33 @@ export function getProgressionSuggestion(exerciseSessions, group, exerciseName, 
   }
 
   if (allAtTop) {
+    // High effort even at the rep ceiling — reps alone said "ready to
+    // add weight," but effort said otherwise, and effort wins: hold here
+    // instead of loading more on top of a set that already cost nearly
+    // everything.
+    if (hasRpe && rpe >= 9) {
+      return {
+        type: "hold",
+        suggestedWeight: weight,
+        targetReps: range[1],
+        ago, lastWeight: weight, lastReps: minReps,
+        sessionCount: sorted.length,
+        msg: `Hit ${range[1]} reps ${ago}, but RPE ${rpe} was near max effort — hold at ${weight} lbs until it feels easier.`,
+      };
+    }
+    // Reps at ceiling AND real reserve left (low RPE) means the weight
+    // is genuinely too light for this rep range now — jump a full extra
+    // step beyond the standard increment instead of the usual bump.
+    const bigJump = hasRpe && rpe <= 7 ? increment * 2 : increment;
     return {
       type: "increase",
-      suggestedWeight: weight + increment,
+      suggestedWeight: weight + bigJump,
       targetReps: range[0],
       ago, lastWeight: weight, lastReps: minReps,
       sessionCount: sorted.length,
-      msg: `Hit ${range[1]} reps on all sets ${ago} — add ${increment} lbs, back to ${range[0]} reps.`,
+      msg: hasRpe && rpe <= 7
+        ? `Hit ${range[1]} reps at only RPE ${rpe} ${ago} — plenty in reserve, add ${bigJump} lbs and back to ${range[0]} reps.`
+        : `Hit ${range[1]} reps on all sets ${ago} — add ${increment} lbs, back to ${range[0]} reps.`,
     };
   }
   const nextReps = Math.min(range[1], minReps + 1);

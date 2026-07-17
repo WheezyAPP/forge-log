@@ -14,6 +14,7 @@ import {
   insertWorkoutSessions, deleteWorkoutSession,
 } from "../lib/storage";
 import { EXERCISE_LINKS } from "../overload/exerciseLinks";
+import { toastError } from "../lib/toast";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -131,7 +132,7 @@ function computePRFlags(sessions) {
   return flags;
 }
 
-export default function SplitDashboard({ userId, userSplitId, splitStartedOn, onSplitChange, workoutSessions, setWorkoutSessions, latestWeight, gender, subTab, setTab, followSource, onBlocksChange }) {
+export default function SplitDashboard({ userId, userSplitId, splitStartedOn, onSplitChange, workoutSessions, setWorkoutSessions, latestWeight, gender, subTab, setTab, followSource, onBlocksChange, dedicatedProgressiveOverload }) {
   const [view, setView] = useState("picker");
   const [selected, setSelected] = useState(() => SPLITS.find(s => s.id === userSplitId) || null);
   const [weekNum, setWeekNum] = useState(1);
@@ -275,12 +276,12 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     setBlocks(followSource.map(item => {
       const history = workoutSessions.filter(s => s.exercise === item.exercise);
       const dismissedAt = dismissed[item.exercise] ?? null;
-      const sugg = getProgressionSuggestion(history, item.grp, item.exercise, dismissedAt);
+      const sugg = getProgressionSuggestion(history, item.grp, item.exercise, dismissedAt, dedicatedProgressiveOverload);
       const w = defaultWeightFor(item.exercise, sugg);
       const n = Math.max(1, item.setCount || 3);
       return {
         exercise: item.exercise, grp: item.grp,
-        sets: Array.from({ length: n }, () => ({ w, r: "" })),
+        sets: Array.from({ length: n }, () => ({ w, r: "", rpe: "" })),
         sugg, repTarget: sugg?.targetReps,
         followedFrom: true,
       };
@@ -308,7 +309,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     if (day.isDone) {
       setBlocks(day.loggedSessions.map(s => ({
         exercise: s.exercise, grp: s.group,
-        sets: (s.sets||[]).map(x => ({ w: String(x.weight ?? ""), r: String(x.reps ?? "") })),
+        sets: (s.sets||[]).map(x => ({ w: String(x.weight ?? ""), r: String(x.reps ?? ""), rpe: x.rpe != null ? String(x.rpe) : "" })),
         sourceId: s.id,
         // Assisted pull-ups/dips store the COMPUTED weight (bodyweight
         // minus assist), not the assist number itself — reopening a saved
@@ -325,10 +326,10 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       setBlocks(program.map(p => {
         const history = workoutSessions.filter(s => s.exercise === p.ex);
         const dismissedAt = dismissed[p.ex] ?? null;
-        const sugg = getProgressionSuggestion(history, p.group, p.ex, dismissedAt);
+        const sugg = getProgressionSuggestion(history, p.group, p.ex, dismissedAt, dedicatedProgressiveOverload);
         const n = Math.max(1, p.sets || 3);
         const w = defaultWeightFor(p.ex, sugg);
-        const sets = Array.from({ length: n }, () => ({ w, r: "" }));
+        const sets = Array.from({ length: n }, () => ({ w, r: "", rpe: "" }));
         return { exercise: p.ex, grp: p.group, sets, sugg, repTarget: p.reps };
       }));
       return;
@@ -339,9 +340,9 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       for (const ex of exs) {
         const history = workoutSessions.filter(s => s.exercise === ex);
         const dismissedAt = dismissed[ex] ?? null;
-        const sugg = getProgressionSuggestion(history, g.n, ex, dismissedAt);
+        const sugg = getProgressionSuggestion(history, g.n, ex, dismissedAt, dedicatedProgressiveOverload);
         const w = defaultWeightFor(ex, sugg);
-        const sets = [{ w, r:"" }, { w, r:"" }, { w, r:"" }];
+        const sets = [{ w, r:"", rpe:"" }, { w, r:"", rpe:"" }, { w, r:"", rpe:"" }];
         newBlocks.push({ exercise: ex, grp: g.n, sets, sugg });
       }
     }
@@ -366,7 +367,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   }
 
   function addSet(bi) {
-    setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, sets: [...b.sets, { w:"", r:"" }] }));
+    setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, sets: [...b.sets, { w:"", r:"", rpe:"" }] }));
   }
   function removeSet(bi, si) {
     setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, sets: b.sets.filter((_,j) => j!==si) }));
@@ -398,9 +399,9 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   function confirmOffSplitExercise(group, exercise) {
     const history = workoutSessions.filter(s => s.exercise === exercise);
     const dismissedAt = dismissed[exercise] ?? null;
-    const sugg = getProgressionSuggestion(history, group, exercise, dismissedAt);
+    const sugg = getProgressionSuggestion(history, group, exercise, dismissedAt, dedicatedProgressiveOverload);
     const w = defaultWeightFor(exercise, sugg);
-    setBlocks(prev => [...prev, { exercise, grp: group, sets:[{w,r:""}], off:true, sugg, repTarget: sugg?.targetReps }]);
+    setBlocks(prev => [...prev, { exercise, grp: group, sets:[{w,r:"",rpe:""}], off:true, sugg, repTarget: sugg?.targetReps }]);
     closeOffSplitPicker();
   }
   function confirmOffSplitGroup(group) {
@@ -410,11 +411,27 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     const history = workoutSessions.filter(s => s.exercise === exercise);
     const next = { ...dismissed, [exercise]: history.length };
     setDismissed(next); saveDismissed(userId, next);
-    const sugg = getProgressionSuggestion(history, blocks[bi].grp, exercise, next[exercise]);
+    const sugg = getProgressionSuggestion(history, blocks[bi].grp, exercise, next[exercise], dedicatedProgressiveOverload);
     setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, sugg }));
   }
 
   async function handleSaveDay() {
+    // Blocks exist but not one has a valid (weight>0 AND reps>0) set —
+    // almost always an accidental empty save, not a deliberate one:
+    // forgot to fill in a weight, or tapped Save before finishing. This
+    // used to fall straight through: delete whatever was already saved
+    // for this date, insert nothing in its place, then still show
+    // "Saved!" — a workout could vanish with zero indication anything
+    // had gone wrong. Bailing out here, before the destructive delete
+    // step even runs, is what actually prevents that. An intentionally
+    // EMPTY blocks array (every exercise removed on purpose, to clear a
+    // day) is still let through below — only "blocks exist but are all
+    // invalid" is blocked.
+    const hasAnyValidSet = blocks.some(b => b.exercise && b.sets.some(s => parseFloat(s.w) > 0 && parseInt(s.r) > 0));
+    if (blocks.length > 0 && !hasAnyValidSet) {
+      toastError("Add a weight and reps to at least one set before saving.");
+      return;
+    }
     setSaving(true);
     const day = next3[dayOffset];
     // Real-life timing wins over the calendar slot: typing in weights and
@@ -436,7 +453,18 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       .filter(b => b.exercise && b.sets.some(s => parseFloat(s.w) > 0 && parseInt(s.r) > 0))
       .map(b => ({
         date: dateKey, exercise: b.exercise, group: b.grp,
-        sets: b.sets.filter(s => parseFloat(s.w) > 0 && parseInt(s.r) > 0).map(s => ({ weight: parseFloat(s.w), reps: parseInt(s.r) })),
+        sets: b.sets.filter(s => parseFloat(s.w) > 0 && parseInt(s.r) > 0).map(s => {
+          const set = { weight: parseFloat(s.w), reps: parseInt(s.r) };
+          // Only attached when actually filled in — an absent rpe (vs. a
+          // stored null/0) is what lets getProgressionSuggestion tell
+          // "never had this feature on" apart from "logged it and RPE
+          // genuinely wasn't captured," and keeps old sessions' shape
+          // untouched for anyone who never turns Dedicated Progressive
+          // Overload on.
+          const rpeVal = parseFloat(s.rpe);
+          if (!Number.isNaN(rpeVal) && rpeVal > 0) set.rpe = rpeVal;
+          return set;
+        }),
         splitId: userSplitId,
       }));
     const saved = toInsert.length ? await insertWorkoutSessions(userId, toInsert) : [];
@@ -863,7 +891,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                   const key = `${bi}-${si}`;
                   const assistVal = assistInputs[key] ?? "";
                   return (
-                    <div key={si} style={{ display:"grid", gridTemplateColumns:"20px 1fr 1fr 1fr 24px", gap:6, marginBottom:5, alignItems:"center" }}>
+                    <div key={si} style={{ display:"grid", gridTemplateColumns: dedicatedProgressiveOverload ? "20px 1fr 1fr 1fr 44px 24px" : "20px 1fr 1fr 1fr 24px", gap:6, marginBottom:5, alignItems:"center" }}>
                       <div style={{ fontSize:11, color: filled ? C.lime : C.creamDim, textAlign:"center" }}>{filled ? <Check size={12}/> : si+1}</div>
                       <input
                         className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()}
@@ -879,6 +907,9 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                         {s.w ? `≈ ${s.w} lbs` : (latestWeight == null ? "no weight logged" : "= lbs lifted")}
                       </div>
                       <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
+                      {dedicatedProgressiveOverload && (
+                        <input className="ft-input" type="number" inputMode="decimal" min="1" max="10" step="0.5" onFocus={e=>e.target.select()} title="RPE (1-10)" placeholder="RPE" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                      )}
                       <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
                     </div>
                   );
@@ -887,7 +918,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                   const key = `${bi}-${si}`;
                   const addedVal = assistInputs[key] ?? "";
                   return (
-                    <div key={si} style={{ display:"grid", gridTemplateColumns:"20px 1fr 1fr 1fr 24px", gap:6, marginBottom:5, alignItems:"center" }}>
+                    <div key={si} style={{ display:"grid", gridTemplateColumns: dedicatedProgressiveOverload ? "20px 1fr 1fr 1fr 44px 24px" : "20px 1fr 1fr 1fr 24px", gap:6, marginBottom:5, alignItems:"center" }}>
                       <div style={{ fontSize:11, color: filled ? C.lime : C.creamDim, textAlign:"center" }}>{filled ? <Check size={12}/> : si+1}</div>
                       <input
                         className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()}
@@ -904,15 +935,21 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                         {s.w ? `≈ ${s.w} lbs` : (latestWeight == null ? "no weight logged" : "= lbs total")}
                       </div>
                       <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
+                      {dedicatedProgressiveOverload && (
+                        <input className="ft-input" type="number" inputMode="decimal" min="1" max="10" step="0.5" onFocus={e=>e.target.select()} title="RPE (1-10)" placeholder="RPE" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                      )}
                       <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
                     </div>
                   );
                 }
                 return (
-                  <div key={si} style={{ display:"grid", gridTemplateColumns:"20px 1fr 1fr 24px", gap:6, marginBottom:5, alignItems:"center" }}>
+                  <div key={si} style={{ display:"grid", gridTemplateColumns: dedicatedProgressiveOverload ? "20px 1fr 1fr 44px 24px" : "20px 1fr 1fr 24px", gap:6, marginBottom:5, alignItems:"center" }}>
                     <div style={{ fontSize:11, color: filled ? C.lime : C.creamDim, textAlign:"center" }}>{filled ? <Check size={12}/> : si+1}</div>
                     <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder="lbs" value={s.w} onChange={e => setVal(bi,si,"w",e.target.value)} />
                     <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
+                    {dedicatedProgressiveOverload && (
+                      <input className="ft-input" type="number" inputMode="decimal" min="1" max="10" step="0.5" onFocus={e=>e.target.select()} title="RPE (1-10)" placeholder="RPE" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                    )}
                     <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
                   </div>
                 );
@@ -1061,7 +1098,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                           // to lift, not silently drop the suggestion.
                           const altHistory = workoutSessions.filter(s => s.exercise === alt);
                           const altDismissedAt = dismissed[alt] ?? null;
-                          const altSugg = getProgressionSuggestion(altHistory, swapOpen.grp, alt, altDismissedAt);
+                          const altSugg = getProgressionSuggestion(altHistory, swapOpen.grp, alt, altDismissedAt, dedicatedProgressiveOverload);
                           const swapW = defaultWeightFor(alt, altSugg);
                           setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, exercise:alt, sugg:altSugg, repTarget: altSugg?.targetReps, sets: b.sets.map(s=>({w:swapW,r:""})) }));
                           setSwapOpen(null);

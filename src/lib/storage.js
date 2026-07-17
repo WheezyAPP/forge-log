@@ -154,6 +154,10 @@ const DEFAULT_PROFILE = {
   showBodyFatPct: null,
   creatineAlreadySaturated: false,
   setCoverageTargets: null,
+  // Opt-in: RPE/RIR-driven autoregulation layered on top of the
+  // always-on percentage-based suggestion math. Off by default so
+  // nobody's logging flow changes shape without them choosing it.
+  dedicatedProgressiveOverload: false,
 };
 
 function profileFromRow(row) {
@@ -178,6 +182,7 @@ function profileFromRow(row) {
     showBodyFatPct: row.show_body_fat_pct ?? null,
     creatineAlreadySaturated: row.creatine_already_saturated ?? false,
     setCoverageTargets: row.set_coverage_targets ?? null,
+    dedicatedProgressiveOverload: row.dedicated_progressive_overload ?? false,
   };
 }
 
@@ -200,6 +205,7 @@ function profileToRow(userId, profile) {
     show_body_fat_pct: profile.showBodyFatPct ?? null,
     creatine_already_saturated: profile.creatineAlreadySaturated ?? false,
     set_coverage_targets: profile.setCoverageTargets ?? null,
+    dedicated_progressive_overload: profile.dedicatedProgressiveOverload ?? false,
   };
 }
 
