@@ -3977,21 +3977,28 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gend
   const [justPRd, setJustPRd] = useState(null); // lift key celebrating a fresh max
   const [displayOverride, setDisplayOverride] = useState({}); // key -> number, mid count-up only
   const [confetti, setConfetti] = useState([]); // [{id, dx, dy, rot}], cleared after the burst
-  const [goalFormOpen, setGoalFormOpen] = useState(null); // lift key with its goal-edit form open
-  const [goalInput, setGoalInput] = useState("");
-  const [planOpen, setPlanOpen] = useState({}); // lift key -> bool, whether the pyramid plan is expanded
+  const [plannerLift, setPlannerLift] = useState(BIG_THREE_LIFTS[0].key);
+  const [plannerGoalInput, setPlannerGoalInput] = useState("");
+  const [plannerPlanOpen, setPlannerPlanOpen] = useState(true);
   const goals = profile?.maxDayGoals || {};
 
-  function saveGoal(key) {
-    const weight = parseFloat(goalInput);
-    if (!weight) return;
-    onProfileChange({ maxDayGoals: { ...goals, [key]: weight } });
-    setGoalFormOpen(null);
-    setPlanOpen(prev => ({ ...prev, [key]: true }));
+  // Rounded here too, not just in the warm-up steps — every number in the
+  // plan is barbell work, and the only way to actually change the weight
+  // on a bar is a plate change in 5 lb steps. Without this, someone
+  // typing a goal like 237 would get a plan where the warm-up rows are
+  // all clean 5s but the attempt itself isn't — the one number that
+  // matters most wouldn't match how the plan can actually be loaded.
+  function saveGoal() {
+    const raw = parseFloat(plannerGoalInput);
+    if (!raw) return;
+    const weight = Math.round(raw / 5) * 5;
+    onProfileChange({ maxDayGoals: { ...goals, [plannerLift]: weight } });
+    setPlannerGoalInput(String(weight));
+    setPlannerPlanOpen(true);
   }
-  function clearGoal(key) {
-    onProfileChange({ maxDayGoals: { ...goals, [key]: null } });
-    setPlanOpen(prev => ({ ...prev, [key]: false }));
+  function clearGoal() {
+    onProfileChange({ maxDayGoals: { ...goals, [plannerLift]: null } });
+    setPlannerGoalInput("");
   }
 
   const byLift = useMemo(() => {
@@ -4079,6 +4086,58 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gend
         })()}
       </div>
 
+      <div className="ft-card" style={{ padding: 18, marginBottom: 14 }}>
+        <div className="ft-label" style={{ marginBottom: 4 }}>Max day planner</div>
+        <div style={{ fontSize: 11.5, color: COLORS.creamDim, marginBottom: 12, lineHeight: 1.4 }}>
+          Pick a lift and a goal weight to get a warm-up ramp for attempt day. Every weight in the plan — including the goal itself — rounds to the nearest 5 lbs, since that's the smallest real change you can make loading a barbell.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select
+            className="ft-select"
+            value={plannerLift}
+            onChange={(e) => { setPlannerLift(e.target.value); setPlannerGoalInput(goals[e.target.value] != null ? String(goals[e.target.value]) : ""); }}
+            style={{ flex: "1 1 160px" }}
+          >
+            {BIG_THREE_LIFTS.map(l => <option key={l.key} value={l.key}>{l.exercise}</option>)}
+          </select>
+          <input
+            className="ft-input" type="number" inputMode="decimal" step="5"
+            placeholder="Goal weight (lbs)" value={plannerGoalInput}
+            onChange={(e) => setPlannerGoalInput(e.target.value)} onFocus={(e) => e.target.select()}
+            style={{ flex: "1 1 140px" }}
+          />
+          <button className="ft-btn ft-btn-primary" disabled={!plannerGoalInput} onClick={saveGoal}>Save goal</button>
+        </div>
+
+        {goals[plannerLift] != null && (
+          <div style={{ background: COLORS.surfaceRaised, borderRadius: 8, padding: "10px 12px", marginTop: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <button onClick={() => setPlannerPlanOpen(o => !o)} style={{ background: "none", border: "none", color: COLORS.ember, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: 0, display: "flex", alignItems: "center", gap: 5 }}>
+                <Target size={13} /> Warm-up ramp for {fmt(goals[plannerLift])} lbs
+                <ChevronDown size={13} style={{ transform: plannerPlanOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+              </button>
+              <button className="ft-btn ft-btn-ghost" style={{ fontSize: 10.5, padding: "4px 10px" }} onClick={clearGoal}>Clear goal</button>
+            </div>
+            {plannerPlanOpen && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.6fr 1fr", gap: "4px 6px", fontSize: 11 }}>
+                <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>% of max</div>
+                <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>Weight</div>
+                <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>Reps</div>
+                <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>Rest</div>
+                {buildMaxDayPlan(goals[plannerLift]).map((step, i) => (
+                  <div key={i} style={{ display: "contents" }}>
+                    <div style={{ color: step.pctLabel === "Attempt" ? COLORS.mint : COLORS.cream, fontWeight: step.pctLabel === "Attempt" ? 700 : 500 }}>{step.pctLabel}</div>
+                    <div className="ft-mono" style={{ color: COLORS.cream, fontWeight: 600 }}>{fmt(step.weight)} lbs</div>
+                    <div style={{ color: COLORS.cream }}>{step.reps}</div>
+                    <div style={{ color: COLORS.creamDim }}>{step.rest}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
         {BIG_THREE_LIFTS.map(({ key, exercise }) => {
           const history = byLift[key] || [];
@@ -4091,9 +4150,6 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gend
           const isOpen = openForm === key;
           const pr = justPRd === key;
           const shownValue = displayOverride[key] ?? (max ? max.weight : null);
-          const goal = goals[key];
-          const isPlanOpen = !!planOpen[key];
-          const isGoalFormOpen = goalFormOpen === key;
 
           return (
             <div key={key} className="ft-card" style={{ padding: 14, borderColor: pr ? COLORS.mint : undefined, transition: "border-color 0.4s ease", position: "relative", overflow: "hidden" }}>
@@ -4120,49 +4176,9 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gend
                 {max ? `as of ${prettyDate(max.date).split(",")[0]}` : "no confirmed max yet"}
               </div>
               {pr && <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.mint, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}><Trophy size={12} /> New max</div>}
-
-              <div style={{ borderTop: `1px solid ${COLORS.border}`, marginTop: 10, paddingTop: 10, marginBottom: 4 }}>
-                {isGoalFormOpen ? (
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <input className="ft-input" type="number" inputMode="decimal" placeholder="Goal weight (lbs)" value={goalInput} onChange={e => setGoalInput(e.target.value)} onFocus={e => e.target.select()} style={{ flex: 1 }} />
-                    <button className="ft-btn ft-btn-primary" style={{ padding: "0 12px" }} disabled={!goalInput} onClick={() => saveGoal(key)}>Save</button>
-                    <button className="ft-btn ft-btn-ghost" style={{ padding: "0 10px" }} onClick={() => setGoalFormOpen(null)}>Cancel</button>
-                  </div>
-                ) : goal ? (
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                    <button onClick={() => setPlanOpen(prev => ({ ...prev, [key]: !isPlanOpen }))} style={{ background: "none", border: "none", color: COLORS.ember, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: 0, display: "flex", alignItems: "center", gap: 4 }}>
-                      <Target size={12} /> Max day goal: {fmt(goal)} lbs
-                      <ChevronDown size={12} style={{ transform: isPlanOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
-                    </button>
-                    <button onClick={() => { setGoalInput(String(goal)); setGoalFormOpen(key); }} aria-label="Edit goal" style={{ background: "none", border: "none", color: COLORS.creamDim, cursor: "pointer", padding: 2 }}><Pencil size={12} /></button>
-                  </div>
-                ) : (
-                  <button onClick={() => { setGoalInput(""); setGoalFormOpen(key); }} style={{ background: "none", border: "none", color: COLORS.creamDim, cursor: "pointer", fontSize: 12, padding: 0, display: "flex", alignItems: "center", gap: 4 }}>
-                    <Target size={12} /> Set a max day goal
-                  </button>
-                )}
-              </div>
-
-              {goal && isPlanOpen && (
-                <div style={{ background: COLORS.surfaceRaised, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
-                  <div style={{ fontSize: 10.5, color: COLORS.creamDim, marginBottom: 8, lineHeight: 1.4 }}>
-                    Warm-up ramp for a {fmt(goal)} lb attempt — light reps early, singles once it's heavy, real rest before the attempt itself.
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.6fr 1fr", gap: "4px 6px", fontSize: 11 }}>
-                    <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>% of max</div>
-                    <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>Weight</div>
-                    <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>Reps</div>
-                    <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>Rest</div>
-                    {buildMaxDayPlan(goal).map((step, i) => (
-                      <div key={i} style={{ display: "contents" }}>
-                        <div style={{ color: step.pctLabel === "Attempt" ? COLORS.mint : COLORS.cream, fontWeight: step.pctLabel === "Attempt" ? 700 : 500 }}>{step.pctLabel}</div>
-                        <div className="ft-mono" style={{ color: COLORS.cream, fontWeight: 600 }}>{fmt(step.weight)} lbs</div>
-                        <div style={{ color: COLORS.cream }}>{step.reps}</div>
-                        <div style={{ color: COLORS.creamDim }}>{step.rest}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <button className="ft-btn ft-btn-ghost" style={{ fontSize: 10.5, marginTop: 10, padding: "4px 10px" }} onClick={() => clearGoal(key)}>Clear goal</button>
+              {goals[key] != null && (
+                <div style={{ fontSize: 11, color: COLORS.ember, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                  <Target size={11} /> Goal set: {fmt(goals[key])} lbs
                 </div>
               )}
 
