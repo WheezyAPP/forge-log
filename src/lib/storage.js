@@ -459,6 +459,89 @@ export async function deleteWorkoutSession(userId, id) {
   }
 }
 
+function maxAttemptFromRow(row) {
+  return {
+    id: row.id,
+    exercise: row.exercise,
+    weight: parseFloat(row.weight),
+    date: row.date,
+    pass: !!row.pass,
+  };
+}
+
+// Big 3 max attempts (squat/bench/deadlift) — deliberately a separate
+// table from workout_sessions, since a max attempt is a single pass/fail
+// lift with no rep count, not a set of reps like everything else logged
+// through Daily Log.
+export async function loadMaxAttempts(userId) {
+  if (!userId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("max_attempts")
+      .select("*")
+      .eq("user_id", userId)
+      .order("date")
+      .order("created_at");
+    if (error) throw error;
+    const attempts = (data || []).map(maxAttemptFromRow);
+    writeCache("maxAttempts", userId, attempts);
+    return attempts;
+  } catch (e) {
+    console.error("loadMaxAttempts failed, using cache:", e);
+    return readCache("maxAttempts", userId, []);
+  }
+}
+
+export async function insertMaxAttempt(userId, attempt) {
+  if (!userId) return null;
+  const row = {
+    id: newId(),
+    user_id: userId,
+    exercise: attempt.exercise,
+    weight: attempt.weight,
+    date: attempt.date,
+    pass: attempt.pass,
+  };
+  const optimistic = maxAttemptFromRow(row);
+  const cached = readCache("maxAttempts", userId, []);
+  writeCache("maxAttempts", userId, [...cached, optimistic]);
+
+  if (!isOnline()) {
+    enqueueOp("insertMaxAttemptRaw", [row]);
+    return optimistic;
+  }
+  try {
+    const { error } = await supabase.from("max_attempts").insert(row);
+    if (error) throw error;
+    return optimistic;
+  } catch (e) {
+    console.error("insertMaxAttempt failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("insertMaxAttemptRaw", [row]);
+    return optimistic;
+  }
+}
+
+export async function deleteMaxAttempt(userId, id) {
+  if (!userId) return;
+
+  const cached = readCache("maxAttempts", userId, []);
+  writeCache("maxAttempts", userId, cached.filter((a) => a.id !== id));
+
+  if (!isOnline()) {
+    enqueueOp("deleteMaxAttempt", [userId, id]);
+    return;
+  }
+  try {
+    const { error } = await supabase.from("max_attempts").delete().eq("user_id", userId).eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    console.error("deleteMaxAttempt failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("deleteMaxAttempt", [userId, id]);
+  }
+}
+
 /* ---------------------------------------------------------------
    User split selection — stores which Lifting Schedule split
    each user has chosen, so it persists across devices/sessions.
@@ -783,6 +866,14 @@ export const offlineExecutors = {
   },
   deleteWorkoutSession: async (userId, id) => {
     const { error } = await supabase.from("workout_sessions").delete().eq("user_id", userId).eq("id", id);
+    if (error) throw error;
+  },
+  insertMaxAttemptRaw: async (row) => {
+    const { error } = await supabase.from("max_attempts").insert(row);
+    if (error) throw error;
+  },
+  deleteMaxAttempt: async (userId, id) => {
+    const { error } = await supabase.from("max_attempts").delete().eq("user_id", userId).eq("id", id);
     if (error) throw error;
   },
   setUserSplitId: async (userId, splitId) => {

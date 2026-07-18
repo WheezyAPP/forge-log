@@ -44,6 +44,7 @@ import {
   Users,
   Download,
   Upload,
+  Trophy,
   Info,
   ClipboardCheck,
   Layers,
@@ -67,6 +68,9 @@ import {
   fetchUserById,
   renameUser,
   loadWorkoutSessions,
+  loadMaxAttempts,
+  insertMaxAttempt,
+  deleteMaxAttempt,
   getUserSplitId,
   getUserSplitStartedOn,
   setUserSplitId,
@@ -974,6 +978,7 @@ const NAV_GROUPS = [
       { key: "trainDay", label: "Training Day", icon: <Dumbbell size={13} /> },
       { key: "splitInfo", label: "Split Info", icon: <CalendarDays size={13} /> },
       { key: "setCoverage", label: "Set Coverage", icon: <Layers size={13} /> },
+      { key: "maxTracker", label: "Big 3 Maxes", icon: <Trophy size={13} /> },
     ],
   },
   { key: "trends", label: "Trending Progression", icon: <TrendingUp size={14} />, feature: "trends" },
@@ -1045,6 +1050,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   const [fatInput, setFatInput] = useState("");
   const [creatineInput, setCreatineInput] = useState("");
   const [workoutSessions, setWorkoutSessions] = useState([]);
+  const [maxAttempts, setMaxAttempts] = useState([]);
   const [weighIns, setWeighIns] = useState({});  // { "2026-07-01": [{id,time,weight,tag},...] }
   const [userSplitId, setUserSplitIdState] = useState(null);
   const [partnerMode, setPartnerMode] = useState(false);
@@ -1060,15 +1066,17 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
   useEffect(() => {
     (async () => {
-      const [p, e, ws, splitId, splitStart] = await Promise.all([
+      const [p, e, ws, splitId, splitStart, ma] = await Promise.all([
         loadProfile(userId), loadEntries(userId),
         loadWorkoutSessions(userId), getUserSplitId(userId), getUserSplitStartedOn(userId),
+        loadMaxAttempts(userId),
       ]);
       setProfile(p);
       setEntries(e);
       setWorkoutSessions(ws);
       setUserSplitIdState(splitId);
       setSplitStartedOn(splitStart);
+      setMaxAttempts(ma);
       setLoaded(true);
     })();
   }, [userId]);
@@ -1697,6 +1705,8 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       )}
 
       {tab === "setCoverage" && <SetCoverageTab workoutSessions={workoutSessions} profile={profile} onProfileChange={handleProfileChange} />}
+
+      {tab === "maxTracker" && <MaxTrackerTab userId={userId} maxAttempts={maxAttempts} setMaxAttempts={setMaxAttempts} />}
 
       {tab === "trends" && <Trends chartData={chartData} workoutSessions={workoutSessions} showLifts={features.train} showWater={features.water} profile={profile} />}
 
@@ -3872,6 +3882,212 @@ function rollingAverage(data, key, window = 3) {
 }
 
 
+
+const BIG_THREE_LIFTS = [
+  { key: "squat", exercise: "Barbell Squat" },
+  { key: "bench", exercise: "Barbell Bench Press" },
+  { key: "deadlift", exercise: "Barbell Deadlift" },
+];
+
+function currentMaxAttempt(attempts) {
+  const passes = attempts.filter(a => a.pass);
+  if (!passes.length) return null;
+  return passes.reduce((best, a) => a.weight > best.weight ? a : best, passes[0]);
+}
+
+// One tiny reusable count-up — runs a rAF loop nudging a local display
+// value toward the real one over `duration`, independent of React's
+// normal render cycle so it doesn't fight the surrounding re-renders.
+function animateNumber(from, to, duration, onFrame) {
+  const start = performance.now();
+  function tick(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    onFrame(Math.round(from + (to - from) * eased));
+    if (t < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts }) {
+  const [openForm, setOpenForm] = useState(null); // lift key with its log-attempt form open
+  const [weightInput, setWeightInput] = useState("");
+  const [dateInput, setDateInput] = useState(todayStr());
+  const [resultInput, setResultInput] = useState(null); // "pass" | "fail"
+  const [saving, setSaving] = useState(false);
+  const [justPRd, setJustPRd] = useState(null); // lift key celebrating a fresh max
+  const [displayOverride, setDisplayOverride] = useState({}); // key -> number, mid count-up only
+  const [confetti, setConfetti] = useState([]); // [{id, dx, dy, rot}], cleared after the burst
+
+  const byLift = useMemo(() => {
+    const map = {};
+    for (const { key, exercise } of BIG_THREE_LIFTS) {
+      map[key] = maxAttempts.filter(a => a.exercise === exercise).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+    }
+    return map;
+  }, [maxAttempts]);
+
+  const total = BIG_THREE_LIFTS.reduce((sum, l) => {
+    const max = currentMaxAttempt(byLift[l.key] || []);
+    return sum + (max ? max.weight : 0);
+  }, 0);
+
+  function openLog(key) {
+    setOpenForm(key);
+    setWeightInput("");
+    setDateInput(todayStr());
+    setResultInput(null);
+    setJustPRd(null);
+  }
+
+  function fireConfetti() {
+    const particles = Array.from({ length: 10 }, (_, i) => ({
+      id: `${Date.now()}-${i}`,
+      dx: Math.round((Math.random() - 0.5) * 110),
+      dy: Math.round(-(35 + Math.random() * 55)),
+      rot: Math.round(Math.random() * 360),
+    }));
+    setConfetti(particles);
+    setTimeout(() => setConfetti([]), 850);
+  }
+
+  async function saveAttempt(key) {
+    const weight = parseFloat(weightInput);
+    if (!weight || !dateInput || !resultInput) return;
+    const lift = BIG_THREE_LIFTS.find(l => l.key === key);
+    const prevMax = currentMaxAttempt(byLift[key] || []);
+    setSaving(true);
+    const saved = await insertMaxAttempt(userId, { exercise: lift.exercise, weight, date: dateInput, pass: resultInput === "pass" });
+    setSaving(false);
+    if (!saved) return;
+    setMaxAttempts(prev => [...prev, saved]);
+    setOpenForm(null);
+
+    const isPR = resultInput === "pass" && (!prevMax || weight > prevMax.weight);
+    if (isPR) {
+      setJustPRd(key);
+      setDisplayOverride(prev => ({ ...prev, [key]: prevMax ? prevMax.weight : 0 }));
+      animateNumber(prevMax ? prevMax.weight : 0, weight, 600, (v) => setDisplayOverride(prev => ({ ...prev, [key]: v })));
+      setTimeout(() => setDisplayOverride(prev => { const next = { ...prev }; delete next[key]; return next; }), 650);
+      fireConfetti();
+    }
+  }
+
+  async function removeAttempt(key, id) {
+    setMaxAttempts(prev => prev.filter(a => a.id !== id));
+    await deleteMaxAttempt(userId, id);
+  }
+
+  return (
+    <div>
+      <div className="ft-card ft-card-hero" style={{ padding: 18, marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div className="ft-label" style={{ marginBottom: 2 }}>Big 3 total</div>
+          <div style={{ fontSize: 11.5, color: COLORS.creamDim }}>Squat + bench + deadlift</div>
+        </div>
+        <div className="ft-mono ft-grad-text" style={{ fontSize: 30, fontWeight: 700 }}>{fmt(total)} lbs</div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+        {BIG_THREE_LIFTS.map(({ key, exercise }) => {
+          const history = byLift[key] || [];
+          const max = currentMaxAttempt(history);
+          const recent = history.slice(-5);
+          const recentWeights = recent.map(a => a.weight);
+          const spanMax = recentWeights.length ? Math.max(...recentWeights) : 0;
+          const spanMin = recentWeights.length ? Math.min(...recentWeights) : 0;
+          const spanRange = Math.max(1, spanMax - spanMin);
+          const isOpen = openForm === key;
+          const pr = justPRd === key;
+          const shownValue = displayOverride[key] ?? (max ? max.weight : null);
+
+          return (
+            <div key={key} className="ft-card" style={{ padding: 14, borderColor: pr ? COLORS.mint : undefined, transition: "border-color 0.4s ease", position: "relative", overflow: "hidden" }}>
+              {confetti.length > 0 && pr && confetti.map(p => (
+                <span key={p.id} style={{
+                  position: "absolute", left: "40%", top: 40, width: 5, height: 5, borderRadius: 2,
+                  background: COLORS.mint, "--dx": `${p.dx}px`, "--dy": `${p.dy}px`, "--rot": `${p.rot}deg`,
+                  animation: "ftConfettiBurst 0.8s ease-out forwards", pointerEvents: "none",
+                }} />
+              ))}
+              <style>{`@keyframes ftConfettiBurst { to { transform: translate(var(--dx), var(--dy)) rotate(var(--rot)); opacity: 0; } } `}</style>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <div style={{ width: 26, height: 26, borderRadius: 7, background: COLORS.emberDim, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Dumbbell size={14} color={COLORS.ember} />
+                </div>
+                <span style={{ fontSize: 13.5, fontWeight: 700, color: COLORS.cream }}>{exercise}</span>
+              </div>
+
+              <div className="ft-mono" style={{ fontSize: 26, fontWeight: 700, color: pr ? COLORS.mint : COLORS.cream }}>
+                {shownValue != null ? `${fmt(shownValue)} lbs` : "—"}
+              </div>
+              <div style={{ fontSize: 11, color: COLORS.creamDim }}>
+                {max ? `as of ${prettyDate(max.date).split(",")[0]}` : "no confirmed max yet"}
+              </div>
+              {pr && <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.mint, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}><Trophy size={12} /> New max</div>}
+
+              {recent.length > 0 && (
+                <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 28, margin: "10px 0" }}>
+                  {recent.map((a, i) => (
+                    <div key={i} title={`${a.weight} lbs, ${a.pass ? "pass" : "fail"}`} style={{
+                      flex: 1, height: `${25 + ((a.weight - spanMin) / spanRange) * 75}%`, borderRadius: 2,
+                      background: a.pass ? COLORS.ember : COLORS.border,
+                    }} />
+                  ))}
+                </div>
+              )}
+
+              {history.length > 0 && (
+                <div style={{ borderTop: `1px solid ${COLORS.border}`, paddingTop: 8, marginBottom: 10, display: "flex", flexDirection: "column", gap: 5 }}>
+                  {[...history].reverse().slice(0, 4).map(a => (
+                    <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: a.pass ? COLORS.mint : COLORS.danger, flexShrink: 0 }} />
+                      <span style={{ color: COLORS.creamDim, flex: 1 }}>{prettyDate(a.date).split(",")[0]}</span>
+                      <span className="ft-mono" style={{ fontWeight: 600 }}>{fmt(a.weight)} lbs</span>
+                      <button onClick={() => removeAttempt(key, a.id)} aria-label="Delete attempt" style={{ background: "none", border: "none", color: COLORS.creamDim, cursor: "pointer", padding: 2 }}><X size={11} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {isOpen ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <input className="ft-input" type="number" inputMode="decimal" placeholder="Weight (lbs)" value={weightInput} onChange={e => setWeightInput(e.target.value)} onFocus={e => e.target.select()} />
+                  <input className="ft-input" type="date" value={dateInput} onChange={e => setDateInput(e.target.value)} />
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => setResultInput("pass")}
+                      style={{ flex: 1, padding: "8px 0", borderRadius: 8, cursor: "pointer", border: `1px solid ${resultInput === "pass" ? COLORS.mint : COLORS.border}`, background: resultInput === "pass" ? COLORS.mintDim : "transparent", color: resultInput === "pass" ? COLORS.mint : COLORS.creamDim, fontWeight: 700, fontSize: 12.5 }}
+                    >
+                      Pass
+                    </button>
+                    <button
+                      onClick={() => setResultInput("fail")}
+                      style={{ flex: 1, padding: "8px 0", borderRadius: 8, cursor: "pointer", border: `1px solid ${resultInput === "fail" ? COLORS.danger : COLORS.border}`, background: resultInput === "fail" ? COLORS.dangerDim : "transparent", color: resultInput === "fail" ? COLORS.danger : COLORS.creamDim, fontWeight: 700, fontSize: 12.5 }}
+                    >
+                      Fail
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button className="ft-btn ft-btn-primary" style={{ flex: 1 }} disabled={saving || !weightInput || !resultInput} onClick={() => saveAttempt(key)}>
+                      {saving ? "Saving…" : "Save attempt"}
+                    </button>
+                    <button className="ft-btn ft-btn-ghost" onClick={() => setOpenForm(null)}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <button className="ft-btn ft-btn-ghost" style={{ width: "100%" }} onClick={() => openLog(key)}>
+                  <Plus size={13} /> Log attempt
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function SetCoverageTab({ workoutSessions, profile, onProfileChange }) {
   const coverage = useMemo(() => computeSetCoverageDetailed(workoutSessions, ANATOMICAL_GROUPS), [workoutSessions]);
