@@ -158,6 +158,10 @@ const DEFAULT_PROFILE = {
   // always-on percentage-based suggestion math. Off by default so
   // nobody's logging flow changes shape without them choosing it.
   dedicatedProgressiveOverload: false,
+  // Per-lift goal weight for an upcoming Big 3 max attempt, e.g.
+  // { squat: 335, bench: 245, deadlift: null } — feeds the warm-up
+  // pyramid plan on the Big 3 Maxes tab.
+  maxDayGoals: null,
 };
 
 function profileFromRow(row) {
@@ -183,6 +187,7 @@ function profileFromRow(row) {
     creatineAlreadySaturated: row.creatine_already_saturated ?? false,
     setCoverageTargets: row.set_coverage_targets ?? null,
     dedicatedProgressiveOverload: row.dedicated_progressive_overload ?? false,
+    maxDayGoals: row.max_day_goals ?? null,
   };
 }
 
@@ -206,6 +211,7 @@ function profileToRow(userId, profile) {
     creatine_already_saturated: profile.creatineAlreadySaturated ?? false,
     set_coverage_targets: profile.setCoverageTargets ?? null,
     dedicated_progressive_overload: profile.dedicatedProgressiveOverload ?? false,
+    max_day_goals: profile.maxDayGoals ?? null,
   };
 }
 

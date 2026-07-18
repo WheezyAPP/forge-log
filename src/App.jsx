@@ -1706,7 +1706,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
       {tab === "setCoverage" && <SetCoverageTab workoutSessions={workoutSessions} profile={profile} onProfileChange={handleProfileChange} />}
 
-      {tab === "maxTracker" && <MaxTrackerTab userId={userId} maxAttempts={maxAttempts} setMaxAttempts={setMaxAttempts} />}
+      {tab === "maxTracker" && <MaxTrackerTab userId={userId} maxAttempts={maxAttempts} setMaxAttempts={setMaxAttempts} latestWeight={latestEntry?.weight ?? null} gender={profile.gender} profile={profile} onProfileChange={handleProfileChange} />}
 
       {tab === "trends" && <Trends chartData={chartData} workoutSessions={workoutSessions} showLifts={features.train} showWater={features.water} profile={profile} />}
 
@@ -3909,7 +3909,66 @@ function animateNumber(from, to, duration, onFrame) {
   requestAnimationFrame(tick);
 }
 
-function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts }) {
+// DOTS (Dynamic Objective Team Scoring) — the current standard
+// bodyweight-normalized powerlifting score outside IPF-affiliated meets
+// (USAPL/USPA use it for Best Lifter awards; it's also the default on
+// OpenPowerlifting.org). Coefficients per the evaluation paper multiple
+// public DOTS calculators cite (Kopayev, Onyshchenko & Stetsenko,
+// "Evaluation of Wilks, Wilks-2, DOTS, IPF and GoodLift Formulas,"
+// referenced via British Powerlifting). Both bodyweight and total are
+// in kg per the formula's own definition, converted from this app's
+// lb-based storage before computing. Uses CURRENT bodyweight against
+// the CURRENT best total — same simplification every public DOTS
+// calculator makes, since a per-lift historical bodyweight isn't
+// something any of them ask for either.
+const DOTS_COEFFICIENTS = {
+  male: { A: -307.75076, B: 24.0900756, C: -0.1918759221, D: 0.0007391293, E: -0.000001093 },
+  female: { A: -57.96288, B: 13.6175032, C: -0.1126655495, D: 0.0005158568, E: -0.0000010706 },
+};
+function computeDotsScore(gender, bodyweightLbs, totalLbs) {
+  if (!bodyweightLbs || !totalLbs) return null;
+  const coef = DOTS_COEFFICIENTS[gender] || DOTS_COEFFICIENTS.male;
+  const bw = bodyweightLbs / 2.20462;
+  const total = totalLbs / 2.20462;
+  const denom = coef.A + coef.B * bw + coef.C * bw ** 2 + coef.D * bw ** 3 + coef.E * bw ** 4;
+  if (denom <= 0) return null; // outside the polynomial's realistic bodyweight range
+  return total * (500 / denom);
+}
+function dotsLevel(score) {
+  if (score < 300) return "Beginner";
+  if (score < 400) return "Novice";
+  if (score < 450) return "Intermediate";
+  if (score < 500) return "Advanced";
+  if (score < 600) return "Elite";
+  return "World class";
+}
+
+// Warm-up pyramid for a planned max attempt — the standard ramping
+// protocol (low reps, rising rest as the weight climbs) used to test a
+// true 1RM without pre-fatiguing: light volume early, singles once it
+// gets heavy, real recovery before the actual attempt. Percentages are
+// approximate on purpose ("~50%" etc., matching how lifters actually
+// talk about warm-up jumps) — weight on the bar is rounded to the
+// nearest 5 lbs, the smallest increment most gyms can actually load.
+const MAX_DAY_PYRAMID_STEPS = [
+  { pct: 0.5, reps: 5, rest: "2 mins" },
+  { pct: 0.6, reps: 3, rest: "2 mins" },
+  { pct: 0.7, reps: 2, rest: "2 mins" },
+  { pct: 0.8, reps: 1, rest: "3 mins" },
+  { pct: 0.9, reps: 1, rest: "3-4 mins" },
+];
+function buildMaxDayPlan(goalWeight) {
+  const steps = MAX_DAY_PYRAMID_STEPS.map(s => ({
+    pctLabel: `~${Math.round(s.pct * 100)}%`,
+    weight: Math.max(5, Math.round((goalWeight * s.pct) / 5) * 5),
+    reps: s.reps,
+    rest: s.rest,
+  }));
+  steps.push({ pctLabel: "Attempt", weight: goalWeight, reps: 1, rest: "Celebrate / rest" });
+  return steps;
+}
+
+function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gender, profile, onProfileChange }) {
   const [openForm, setOpenForm] = useState(null); // lift key with its log-attempt form open
   const [weightInput, setWeightInput] = useState("");
   const [dateInput, setDateInput] = useState(todayStr());
@@ -3918,6 +3977,22 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts }) {
   const [justPRd, setJustPRd] = useState(null); // lift key celebrating a fresh max
   const [displayOverride, setDisplayOverride] = useState({}); // key -> number, mid count-up only
   const [confetti, setConfetti] = useState([]); // [{id, dx, dy, rot}], cleared after the burst
+  const [goalFormOpen, setGoalFormOpen] = useState(null); // lift key with its goal-edit form open
+  const [goalInput, setGoalInput] = useState("");
+  const [planOpen, setPlanOpen] = useState({}); // lift key -> bool, whether the pyramid plan is expanded
+  const goals = profile?.maxDayGoals || {};
+
+  function saveGoal(key) {
+    const weight = parseFloat(goalInput);
+    if (!weight) return;
+    onProfileChange({ maxDayGoals: { ...goals, [key]: weight } });
+    setGoalFormOpen(null);
+    setPlanOpen(prev => ({ ...prev, [key]: true }));
+  }
+  function clearGoal(key) {
+    onProfileChange({ maxDayGoals: { ...goals, [key]: null } });
+    setPlanOpen(prev => ({ ...prev, [key]: false }));
+  }
 
   const byLift = useMemo(() => {
     const map = {};
@@ -3980,12 +4055,28 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts }) {
 
   return (
     <div>
-      <div className="ft-card ft-card-hero" style={{ padding: 18, marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div className="ft-card ft-card-hero" style={{ padding: 18, marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="ft-label" style={{ marginBottom: 2 }}>Big 3 total</div>
           <div style={{ fontSize: 11.5, color: COLORS.creamDim }}>Squat + bench + deadlift</div>
         </div>
         <div className="ft-mono ft-grad-text" style={{ fontSize: 30, fontWeight: 700 }}>{fmt(total)} lbs</div>
+        {(() => {
+          const dots = total > 0 ? computeDotsScore(gender, latestWeight, total) : null;
+          if (dots == null) {
+            return (
+              <div style={{ fontSize: 11, color: COLORS.creamDim, maxWidth: 140, textAlign: "right" }}>
+                {latestWeight ? "Log a max to see your DOTS score" : "Log a weigh-in and a max to see your DOTS score"}
+              </div>
+            );
+          }
+          return (
+            <div style={{ textAlign: "right" }}>
+              <div className="ft-mono" style={{ fontSize: 20, fontWeight: 700, color: COLORS.mint }}>{fmt(dots, 1)}</div>
+              <div style={{ fontSize: 10.5, color: COLORS.creamDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em" }}>DOTS · {dotsLevel(dots)}</div>
+            </div>
+          );
+        })()}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
@@ -4000,6 +4091,9 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts }) {
           const isOpen = openForm === key;
           const pr = justPRd === key;
           const shownValue = displayOverride[key] ?? (max ? max.weight : null);
+          const goal = goals[key];
+          const isPlanOpen = !!planOpen[key];
+          const isGoalFormOpen = goalFormOpen === key;
 
           return (
             <div key={key} className="ft-card" style={{ padding: 14, borderColor: pr ? COLORS.mint : undefined, transition: "border-color 0.4s ease", position: "relative", overflow: "hidden" }}>
@@ -4026,6 +4120,51 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts }) {
                 {max ? `as of ${prettyDate(max.date).split(",")[0]}` : "no confirmed max yet"}
               </div>
               {pr && <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.mint, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}><Trophy size={12} /> New max</div>}
+
+              <div style={{ borderTop: `1px solid ${COLORS.border}`, marginTop: 10, paddingTop: 10, marginBottom: 4 }}>
+                {isGoalFormOpen ? (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input className="ft-input" type="number" inputMode="decimal" placeholder="Goal weight (lbs)" value={goalInput} onChange={e => setGoalInput(e.target.value)} onFocus={e => e.target.select()} style={{ flex: 1 }} />
+                    <button className="ft-btn ft-btn-primary" style={{ padding: "0 12px" }} disabled={!goalInput} onClick={() => saveGoal(key)}>Save</button>
+                    <button className="ft-btn ft-btn-ghost" style={{ padding: "0 10px" }} onClick={() => setGoalFormOpen(null)}>Cancel</button>
+                  </div>
+                ) : goal ? (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <button onClick={() => setPlanOpen(prev => ({ ...prev, [key]: !isPlanOpen }))} style={{ background: "none", border: "none", color: COLORS.ember, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: 0, display: "flex", alignItems: "center", gap: 4 }}>
+                      <Target size={12} /> Max day goal: {fmt(goal)} lbs
+                      <ChevronDown size={12} style={{ transform: isPlanOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+                    </button>
+                    <button onClick={() => { setGoalInput(String(goal)); setGoalFormOpen(key); }} aria-label="Edit goal" style={{ background: "none", border: "none", color: COLORS.creamDim, cursor: "pointer", padding: 2 }}><Pencil size={12} /></button>
+                  </div>
+                ) : (
+                  <button onClick={() => { setGoalInput(""); setGoalFormOpen(key); }} style={{ background: "none", border: "none", color: COLORS.creamDim, cursor: "pointer", fontSize: 12, padding: 0, display: "flex", alignItems: "center", gap: 4 }}>
+                    <Target size={12} /> Set a max day goal
+                  </button>
+                )}
+              </div>
+
+              {goal && isPlanOpen && (
+                <div style={{ background: COLORS.surfaceRaised, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+                  <div style={{ fontSize: 10.5, color: COLORS.creamDim, marginBottom: 8, lineHeight: 1.4 }}>
+                    Warm-up ramp for a {fmt(goal)} lb attempt — light reps early, singles once it's heavy, real rest before the attempt itself.
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.6fr 1fr", gap: "4px 6px", fontSize: 11 }}>
+                    <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>% of max</div>
+                    <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>Weight</div>
+                    <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>Reps</div>
+                    <div style={{ color: COLORS.creamDim, fontWeight: 700 }}>Rest</div>
+                    {buildMaxDayPlan(goal).map((step, i) => (
+                      <div key={i} style={{ display: "contents" }}>
+                        <div style={{ color: step.pctLabel === "Attempt" ? COLORS.mint : COLORS.cream, fontWeight: step.pctLabel === "Attempt" ? 700 : 500 }}>{step.pctLabel}</div>
+                        <div className="ft-mono" style={{ color: COLORS.cream, fontWeight: 600 }}>{fmt(step.weight)} lbs</div>
+                        <div style={{ color: COLORS.cream }}>{step.reps}</div>
+                        <div style={{ color: COLORS.creamDim }}>{step.rest}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <button className="ft-btn ft-btn-ghost" style={{ fontSize: 10.5, marginTop: 10, padding: "4px 10px" }} onClick={() => clearGoal(key)}>Clear goal</button>
+                </div>
+              )}
 
               {recent.length > 0 && (
                 <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 28, margin: "10px 0" }}>
