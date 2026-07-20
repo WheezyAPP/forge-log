@@ -87,7 +87,8 @@ import {
   addCommunityFood,
 } from "./lib/storage";
 import { flushQueue, onQueueChange, onQueueError, clearQueue, isOnline } from "./lib/offlineQueue";
-import { toastSuccess, toastUndo } from "./lib/toast";
+import { toastSuccess, toastUndo, toastError } from "./lib/toast";
+import { pushNotificationsSupported, getCurrentPushSubscription, subscribeToPushNotifications, unsubscribeFromPushNotifications } from "./lib/pushNotifications";
 import { WifiOff, RefreshCw } from "lucide-react";
 
 /* ---------------------------------------------------------------
@@ -1027,6 +1028,20 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   const [tab, setTab] = useState("home");
   const [selectedDate, setSelectedDate] = useState(todayStr());
 
+  // Notification tap-to-open — api/send-notifications.js sets each
+  // push's url to "/?tab=water" (etc.), so a tap lands on the specific
+  // screen the reminder was about instead of just the app's default
+  // Dashboard. Only runs once on mount; the URL is cleaned up right
+  // after so a later manual refresh doesn't keep forcing that tab.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const targetTab = params.get("tab");
+    if (targetTab) {
+      setTab(targetTab);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
   // Feature toggles — per-user, per-device (localStorage). Loaded when the
   // user is known; toggling a feature off while you're inside it bounces
   // you back to the Dashboard rather than stranding you on a hidden tab.
@@ -1743,7 +1758,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
       {tab === "trends" && <Trends chartData={chartData} workoutSessions={workoutSessions} showLifts={features.train} showWater={features.water} profile={profile} />}
 
-      {tab === "settings" && <SettingsPanel profile={profile} onChange={handleProfileChange} latestWeight={latestEntry?.weight ?? null} features={features} onToggleFeature={handleToggleFeature} entries={entries} onImportCsv={handleImportCsv} />}
+      {tab === "settings" && <SettingsPanel profile={profile} onChange={handleProfileChange} latestWeight={latestEntry?.weight ?? null} features={features} onToggleFeature={handleToggleFeature} entries={entries} onImportCsv={handleImportCsv} userId={userId} />}
       </div>
     </div>
 
@@ -4968,11 +4983,46 @@ function parseImportCsv(text) {
   return { rows, errors };
 }
 
-function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeature, entries, onImportCsv }) {
+function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeature, entries, onImportCsv, userId }) {
   const adaptive = useMemo(() => computeAdaptiveTDEE(entries, profile.goalType), [entries, profile.goalType]);
   const [importPreview, setImportPreview] = useState(null); // { rows, errors, fileName }
   const [importing, setImporting] = useState(false);
   const importInputRef = useRef(null);
+
+  // "unknown" while checking on mount, then "unsupported" | "off" | "on".
+  // Checked against the browser's ACTUAL current subscription rather
+  // than just trusting a stored flag — a subscription that lives in the
+  // browser but never made it to Supabase (a failed save, a cleared
+  // cache) would otherwise show as "on" when notifications wouldn't
+  // really be tracked anywhere.
+  const [notifStatus, setNotifStatus] = useState("unknown");
+  const [notifBusy, setNotifBusy] = useState(false);
+
+  useEffect(() => {
+    if (!pushNotificationsSupported()) { setNotifStatus("unsupported"); return; }
+    getCurrentPushSubscription().then(sub => setNotifStatus(sub ? "on" : "off"));
+  }, []);
+
+  async function handleToggleNotifications() {
+    setNotifBusy(true);
+    if (notifStatus === "on") {
+      await unsubscribeFromPushNotifications();
+      setNotifStatus("off");
+    } else {
+      const result = await subscribeToPushNotifications(userId);
+      if (result.ok) {
+        setNotifStatus("on");
+        toastSuccess("Notifications enabled");
+      } else if (result.reason === "denied") {
+        toastError("Notifications blocked — check your browser's site settings to allow them.");
+      } else if (result.reason === "not-configured") {
+        toastError("Notifications aren't set up yet on this deployment.");
+      } else {
+        toastError("Couldn't enable notifications — try again in a moment.");
+      }
+    }
+    setNotifBusy(false);
+  }
 
   function handleFileSelected(e) {
     const file = e.target.files?.[0];
@@ -5418,6 +5468,42 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
             )}
           </div>
         )}
+      </div>
+
+      <div className={`ft-card ${notifStatus === "on" ? "ft-card-hero" : ""}`} style={{ padding: 18, maxWidth: 380, flex: 1, minWidth: 280 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div className="ft-label" style={{ marginBottom: 0 }}>Notifications</div>
+            {notifStatus === "on" && <span style={{ fontSize: 10, fontWeight: 700, color: COLORS.mint, background: COLORS.mintDim, padding: "3px 8px", borderRadius: 999 }}>ACTIVE</span>}
+          </div>
+          <button
+            role="switch"
+            aria-checked={notifStatus === "on"}
+            disabled={notifStatus === "unsupported" || notifStatus === "unknown" || notifBusy}
+            onClick={handleToggleNotifications}
+            className="ft-btn-icon"
+            style={{
+              width: 44, height: 25, borderRadius: 999, border: "none",
+              cursor: (notifStatus === "unsupported" || notifBusy) ? "not-allowed" : "pointer",
+              opacity: notifStatus === "unsupported" ? 0.4 : 1,
+              background: notifStatus === "on" ? `linear-gradient(135deg, ${COLORS.ember}, ${COLORS.mint})` : COLORS.surfaceRaised,
+              position: "relative", flexShrink: 0, padding: 0, minWidth: 44, minHeight: 25,
+              transition: "background 0.25s ease",
+            }}
+          >
+            <span style={{
+              position: "absolute", top: 3, left: notifStatus === "on" ? 22 : 3,
+              width: 19, height: 19, borderRadius: "50%", background: COLORS.cream,
+              transition: "left 0.22s cubic-bezier(0.16,1,0.3,1)",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
+            }} />
+          </button>
+        </div>
+        <div style={{ fontSize: 12, color: COLORS.creamDim, lineHeight: 1.5 }}>
+          {notifStatus === "unsupported"
+            ? "Not supported in this browser — try Chrome, Edge, or Safari on iOS 16.4+ with the app added to your home screen."
+            : "Gentle nudges if water, weight, or food haven't been logged yet — never more than needed, and they stop the moment you log or hit that day's goal."}
+        </div>
       </div>
     </div>
   );

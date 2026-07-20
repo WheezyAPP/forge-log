@@ -706,6 +706,55 @@ export async function deleteCustomSplitTemplate(userId, id) {
   }
 }
 
+// Push notification subscriptions — deliberately NOT run through the
+// offline queue like everything else in this file. Subscribing requires
+// a live connection to the browser's push service in the first place
+// (there's nothing to queue and retry — if you're offline, the
+// subscribe attempt itself fails immediately), and it's a rare,
+// deliberate action rather than routine logging data.
+export async function loadPushSubscriptions(userId) {
+  if (!userId) return [];
+  try {
+    const { data, error } = await supabase.from("push_subscriptions").select("*").eq("user_id", userId);
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    console.error("loadPushSubscriptions failed:", e);
+    return [];
+  }
+}
+
+// Upsert on endpoint (unique per browser+device) — resubscribing the
+// same device (e.g. after clearing the permission and re-enabling)
+// cleanly replaces its row instead of erroring on a duplicate.
+export async function savePushSubscription(userId, sub) {
+  if (!userId) return null;
+  try {
+    const { error } = await supabase.from("push_subscriptions").upsert({
+      user_id: userId,
+      endpoint: sub.endpoint,
+      p256dh: sub.p256dh,
+      auth: sub.auth,
+      timezone: sub.timezone,
+    }, { onConflict: "endpoint" });
+    if (error) throw error;
+    return true;
+  } catch (e) {
+    console.error("savePushSubscription failed:", e);
+    toastError("Couldn't enable notifications — try again in a moment.");
+    return false;
+  }
+}
+
+export async function deletePushSubscriptionByEndpoint(endpoint) {
+  try {
+    const { error } = await supabase.from("push_subscriptions").delete().eq("endpoint", endpoint);
+    if (error) throw error;
+  } catch (e) {
+    console.error("deletePushSubscriptionByEndpoint failed:", e);
+  }
+}
+
 /* ---------------------------------------------------------------
    User split selection — stores which Lifting Schedule split
    each user has chosen, so it persists across devices/sessions.

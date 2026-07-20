@@ -12,28 +12,22 @@ export default defineConfig({
       // so tell the plugin not to generate a second one.
       manifest: false,
       includeAssets: ["icon-192.png", "icon-512.png"],
-      workbox: {
-        // Precache the built app shell (JS/CSS/HTML/icons) so the app
-        // itself loads with zero signal, not just a blank/failed page.
+      // injectManifest (not the default generateSW) — this app now needs
+      // its own `push` and `notificationclick` event listeners for web
+      // push notifications, which generateSW mode has no way to add
+      // (it only ever produces a fully auto-generated service worker
+      // from config, no room for custom handlers). injectManifest lets
+      // src/sw.js be a real, hand-written service worker — Workbox still
+      // handles precaching inside it, just via an explicit call instead
+      // of owning the whole file.
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.js",
+      injectManifest: {
+        // Same precache scope as before the switch — the app shell
+        // (JS/CSS/HTML/icons) still gets cached so the app itself loads
+        // with zero signal, not just a blank/failed page.
         globPatterns: ["**/*.{js,css,html,png,svg,ico}"],
-        // Supabase reads (GET requests) get cached so the last-known data
-        // is available offline too — falls back to cache if the network
-        // request takes longer than 5s or fails outright. This works
-        // alongside (not instead of) the app's own localStorage read
-        // cache in src/lib/storage.js.
-        runtimeCaching: [
-          {
-            urlPattern: ({ url }) =>
-              url.hostname.endsWith(".supabase.co") && url.pathname.includes("/rest/v1/"),
-            handler: "NetworkFirst",
-            options: {
-              cacheName: "supabase-api-cache",
-              networkTimeoutSeconds: 5,
-              expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 7 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
       },
     }),
   ],
