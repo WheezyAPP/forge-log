@@ -548,6 +548,164 @@ export async function deleteMaxAttempt(userId, id) {
   }
 }
 
+function customDayPlanFromRow(row) {
+  return {
+    date: row.date,
+    dayType: row.day_type,
+    isRest: !!row.is_rest,
+    exercises: row.exercises || [],
+  };
+}
+
+// A one-time forward plan for specific calendar dates — keyed by date in
+// the returned object (not an array) since callers always want "what's
+// planned for THIS date," never a list to iterate.
+export async function loadCustomDayPlans(userId) {
+  if (!userId) return {};
+  try {
+    const { data, error } = await supabase
+      .from("custom_day_plans")
+      .select("*")
+      .eq("user_id", userId)
+      .order("date");
+    if (error) throw error;
+    const map = {};
+    for (const row of data || []) map[row.date] = customDayPlanFromRow(row);
+    writeCache("customDayPlans", userId, map);
+    return map;
+  } catch (e) {
+    console.error("loadCustomDayPlans failed, using cache:", e);
+    return readCache("customDayPlans", userId, {});
+  }
+}
+
+// Upsert on (user_id, date) — re-planning an already-planned date cleanly
+// replaces it rather than creating a duplicate row, matching the unique
+// constraint on the table.
+export async function saveCustomDayPlan(userId, plan) {
+  if (!userId) return null;
+  const row = {
+    user_id: userId,
+    date: plan.date,
+    day_type: plan.dayType,
+    is_rest: plan.isRest,
+    exercises: plan.exercises || [],
+  };
+  const optimistic = customDayPlanFromRow(row);
+  const cached = readCache("customDayPlans", userId, {});
+  writeCache("customDayPlans", userId, { ...cached, [plan.date]: optimistic });
+
+  if (!isOnline()) {
+    enqueueOp("saveCustomDayPlanRaw", [row]);
+    return optimistic;
+  }
+  try {
+    const { error } = await supabase.from("custom_day_plans").upsert(row, { onConflict: "user_id,date" });
+    if (error) throw error;
+    return optimistic;
+  } catch (e) {
+    console.error("saveCustomDayPlan failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("saveCustomDayPlanRaw", [row]);
+    return optimistic;
+  }
+}
+
+export async function deleteCustomDayPlan(userId, date) {
+  if (!userId) return;
+
+  const cached = readCache("customDayPlans", userId, {});
+  const next = { ...cached };
+  delete next[date];
+  writeCache("customDayPlans", userId, next);
+
+  if (!isOnline()) {
+    enqueueOp("deleteCustomDayPlan", [userId, date]);
+    return;
+  }
+  try {
+    const { error } = await supabase.from("custom_day_plans").delete().eq("user_id", userId).eq("date", date);
+    if (error) throw error;
+  } catch (e) {
+    console.error("deleteCustomDayPlan failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("deleteCustomDayPlan", [userId, date]);
+  }
+}
+
+function customSplitTemplateFromRow(row) {
+  return { id: row.id, name: row.name, days: row.days || [] };
+}
+
+// Named, reusable version of a week built in the day-plan builder —
+// keyed by relative day position (Day 1..7), not real dates, so the
+// same template can be applied to any future week.
+export async function loadCustomSplitTemplates(userId) {
+  if (!userId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("custom_split_templates")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at");
+    if (error) throw error;
+    const templates = (data || []).map(customSplitTemplateFromRow);
+    writeCache("customSplitTemplates", userId, templates);
+    return templates;
+  } catch (e) {
+    console.error("loadCustomSplitTemplates failed, using cache:", e);
+    return readCache("customSplitTemplates", userId, []);
+  }
+}
+
+export async function saveCustomSplitTemplate(userId, template) {
+  if (!userId) return null;
+  const row = {
+    id: (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    user_id: userId,
+    name: template.name,
+    days: template.days || [],
+  };
+  const optimistic = customSplitTemplateFromRow(row);
+  const cached = readCache("customSplitTemplates", userId, []);
+  writeCache("customSplitTemplates", userId, [...cached, optimistic]);
+
+  if (!isOnline()) {
+    enqueueOp("saveCustomSplitTemplateRaw", [row]);
+    return optimistic;
+  }
+  try {
+    const { error } = await supabase.from("custom_split_templates").insert(row);
+    if (error) throw error;
+    return optimistic;
+  } catch (e) {
+    console.error("saveCustomSplitTemplate failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("saveCustomSplitTemplateRaw", [row]);
+    return optimistic;
+  }
+}
+
+export async function deleteCustomSplitTemplate(userId, id) {
+  if (!userId) return;
+
+  const cached = readCache("customSplitTemplates", userId, []);
+  writeCache("customSplitTemplates", userId, cached.filter((t) => t.id !== id));
+
+  if (!isOnline()) {
+    enqueueOp("deleteCustomSplitTemplate", [userId, id]);
+    return;
+  }
+  try {
+    const { error } = await supabase.from("custom_split_templates").delete().eq("user_id", userId).eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    console.error("deleteCustomSplitTemplate failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("deleteCustomSplitTemplate", [userId, id]);
+  }
+}
+
 /* ---------------------------------------------------------------
    User split selection — stores which Lifting Schedule split
    each user has chosen, so it persists across devices/sessions.
@@ -880,6 +1038,22 @@ export const offlineExecutors = {
   },
   deleteMaxAttempt: async (userId, id) => {
     const { error } = await supabase.from("max_attempts").delete().eq("user_id", userId).eq("id", id);
+    if (error) throw error;
+  },
+  saveCustomDayPlanRaw: async (row) => {
+    const { error } = await supabase.from("custom_day_plans").upsert(row, { onConflict: "user_id,date" });
+    if (error) throw error;
+  },
+  deleteCustomDayPlan: async (userId, date) => {
+    const { error } = await supabase.from("custom_day_plans").delete().eq("user_id", userId).eq("date", date);
+    if (error) throw error;
+  },
+  saveCustomSplitTemplateRaw: async (row) => {
+    const { error } = await supabase.from("custom_split_templates").insert(row);
+    if (error) throw error;
+  },
+  deleteCustomSplitTemplate: async (userId, id) => {
+    const { error } = await supabase.from("custom_split_templates").delete().eq("user_id", userId).eq("id", id);
     if (error) throw error;
   },
   setUserSplitId: async (userId, splitId) => {

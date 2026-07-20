@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Dumbbell, ChevronDown, ChevronUp, CalendarDays, Target, Check, RotateCcw,
   Repeat, ExternalLink, X as XIcon, ChevronRight, ArrowLeft, History, Trophy,
-  AlertTriangle, TrendingUp, Plus, Trash2, Moon, Zap, Lock, Users, Eye, Search,
+  AlertTriangle, TrendingUp, Plus, Trash2, Moon, Zap, Lock, Users, Eye, Search, BookmarkPlus,
 } from "lucide-react";
 import {
   SPLITS, pickExercises, getFixedProgram, EX, WEAK_POINT_OPTIONS, WEAK_POINT_MAX_PICKS,
@@ -134,7 +134,7 @@ function computePRFlags(sessions) {
   return flags;
 }
 
-export default function SplitDashboard({ userId, userSplitId, splitStartedOn, onSplitChange, workoutSessions, setWorkoutSessions, latestWeight, gender, subTab, setTab, followSource, onBlocksChange, dedicatedProgressiveOverload }) {
+export default function SplitDashboard({ userId, userSplitId, splitStartedOn, onSplitChange, workoutSessions, setWorkoutSessions, latestWeight, gender, subTab, setTab, followSource, onBlocksChange, dedicatedProgressiveOverload, customDayPlans, onSaveCustomDayPlan, onDeleteCustomDayPlan, customSplitTemplates, onSaveCustomSplitTemplate, onDeleteCustomSplitTemplate }) {
   const [view, setView] = useState("picker");
   const [selected, setSelected] = useState(() => SPLITS.find(s => s.id === userSplitId) || null);
   const [weekNum, setWeekNum] = useState(1);
@@ -225,6 +225,90 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     }
   }
 
+  // Custom day plan builder — a one-time forward plan for specific
+  // dates, not a reusable split. planDrafts is null when the planner
+  // isn't open; populated from whatever's already saved (so reopening
+  // to tweak a day doesn't mean starting over) the moment it opens.
+  const [planDrafts, setPlanDrafts] = useState(null);
+  const [planSearch, setPlanSearch] = useState({});
+
+  function openPlanWeek() {
+    const drafts = {};
+    for (let i = 0; i < 7; i++) {
+      const dateKey = localDateStr(addDays(today, i));
+      const existing = customDayPlans?.[dateKey];
+      drafts[dateKey] = existing
+        ? { dayType: existing.isRest ? "" : existing.dayType, isRest: existing.isRest, exercises: existing.exercises }
+        : { dayType: "", isRest: false, exercises: [] };
+    }
+    setPlanDrafts(drafts);
+    setPlanSearch({});
+    setView("planWeek");
+  }
+  function updateDraft(dateKey, patch) {
+    setPlanDrafts(prev => ({ ...prev, [dateKey]: { ...prev[dateKey], ...patch } }));
+  }
+  function addDraftExercise(dateKey, ex) {
+    setPlanDrafts(prev => {
+      const draft = prev[dateKey];
+      if (draft.exercises.some(e => e.exercise === ex.exercise)) return prev; // no dupes
+      return { ...prev, [dateKey]: { ...draft, exercises: [...draft.exercises, ex] } };
+    });
+    setPlanSearch(prev => ({ ...prev, [dateKey]: "" }));
+  }
+  function removeDraftExercise(dateKey, exercise) {
+    setPlanDrafts(prev => ({ ...prev, [dateKey]: { ...prev[dateKey], exercises: prev[dateKey].exercises.filter(e => e.exercise !== exercise) } }));
+  }
+  async function clearPlannedDay(dateKey) {
+    setPlanDrafts(prev => ({ ...prev, [dateKey]: { dayType: "", isRest: false, exercises: [] } }));
+    await onDeleteCustomDayPlan?.(dateKey);
+  }
+  async function lockInWeek() {
+    for (let i = 0; i < 7; i++) {
+      const dateKey = localDateStr(addDays(today, i));
+      const draft = planDrafts[dateKey];
+      const touched = draft.isRest || draft.dayType.trim() || draft.exercises.length > 0;
+      if (!touched) continue;
+      await onSaveCustomDayPlan?.({
+        date: dateKey,
+        dayType: draft.isRest ? "Rest" : (draft.dayType.trim() || "Planned day"),
+        isRest: draft.isRest,
+        exercises: draft.exercises,
+      });
+    }
+    setView("locked");
+  }
+
+  // Templates store day-slots by RELATIVE position (Day 1..7), not real
+  // dates — applying one just maps those 7 slots onto whichever 7 real
+  // dates the planner currently has open, so the same template can be
+  // reused on any future week without ever touching the dates it was
+  // originally built for.
+  const [templateNameInput, setTemplateNameInput] = useState("");
+  const [templatePromptOpen, setTemplatePromptOpen] = useState(false);
+
+  function applyTemplate(template) {
+    const drafts = {};
+    for (let i = 0; i < 7; i++) {
+      const dateKey = localDateStr(addDays(today, i));
+      const slot = template.days[i] || { dayType: "", isRest: false, exercises: [] };
+      drafts[dateKey] = { dayType: slot.dayType || "", isRest: !!slot.isRest, exercises: slot.exercises || [] };
+    }
+    setPlanDrafts(drafts);
+  }
+  function saveAsTemplate() {
+    const name = templateNameInput.trim();
+    if (!name) return;
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const dateKey = localDateStr(addDays(today, i));
+      const draft = planDrafts[dateKey];
+      return { dayType: draft.dayType, isRest: draft.isRest, exercises: draft.exercises };
+    });
+    onSaveCustomSplitTemplate?.({ name, days });
+    setTemplateNameInput("");
+    setTemplatePromptOpen(false);
+  }
+
   const phaseLabel = weekNum <= 4 ? "Foundation — building habits" : weekNum <= 8 ? "Progression — increasing variety" : "Peak — full rotation active";
 
   const preview10 = useMemo(() => {
@@ -251,15 +335,30 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     return Array.from({ length: 4 }, (_, i) => {
       const date = addDays(today, i);
       const dateKey = localDateStr(date);
+      const loggedSessions = workoutSessions.filter(s => s.date === dateKey && s.splitId === userSplitId);
+      // A custom-planned date overrides whatever the assigned split's
+      // repeating pattern would normally show — but only for dates
+      // actually planned. Anything past the planned range (or a date
+      // that was never planned) falls straight through to the regular
+      // pattern below, unaffected.
+      const custom = customDayPlans?.[dateKey];
+      if (custom) {
+        return {
+          i, date, dateKey, dateStr: fmtDay(date),
+          dayType: custom.dayType, isRest: custom.isRest, def: null, occ: 0,
+          isToday: i === 0, isDone: loggedSessions.length > 0, loggedSessions,
+          customExercises: custom.isRest ? null : custom.exercises,
+          isCustomPlanned: true,
+        };
+      }
       const pi = (date.getDay() + 6) % 7;
       const dayType = effectiveSplit.pattern[pi];
       const isRest = dayType === "Rest";
       const def = isRest ? null : effectiveSplit.defs[dayType];
       const occ = effectiveSplit.pattern.slice(0, pi).filter(t => t === dayType).length;
-      const loggedSessions = workoutSessions.filter(s => s.date === dateKey && s.splitId === userSplitId);
-      return { i, date, dateKey, dateStr: fmtDay(date), dayType, isRest, def, occ, isToday: i === 0, isDone: loggedSessions.length > 0, loggedSessions };
+      return { i, date, dateKey, dateStr: fmtDay(date), dayType, isRest, def, occ, isToday: i === 0, isDone: loggedSessions.length > 0, loggedSessions, customExercises: null, isCustomPlanned: false };
     });
-  }, [effectiveSplit, today, workoutSessions, userSplitId]);
+  }, [effectiveSplit, today, workoutSessions, userSplitId, customDayPlans]);
 
   function openDay(day) {
     setDayOffset(day.i);
@@ -327,6 +426,22 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         // it: delete and redo the exercise if it needs to change.
         locked: isAssistedBodyweight(s.exercise),
       })));
+      return;
+    }
+    if (day.customExercises) {
+      // A custom-planned day names specific exercises directly rather
+      // than a group to auto-pick from — same suggestion/default-weight
+      // machinery as everywhere else, just skipping getFixedProgram and
+      // the def.groups auto-pick entirely, since there's no "def" to
+      // drive here.
+      setBlocks(day.customExercises.map(({ exercise, group }) => {
+        const history = workoutSessions.filter(s => s.exercise === exercise);
+        const dismissedAt = dismissed[exercise] ?? null;
+        const sugg = getProgressionSuggestion(history, group, exercise, dismissedAt, dedicatedProgressiveOverload);
+        const w = defaultWeightFor(exercise, sugg);
+        const sets = [{ w, r:"", rpe:"" }, { w, r:"", rpe:"" }, { w, r:"", rpe:"" }];
+        return { exercise, grp: group, sets, sugg };
+      }));
       return;
     }
     const program = getFixedProgram(day.def, day.occ ?? 0);
@@ -686,6 +801,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
             </div>
           )}
           <button className="ft-btn ft-btn-ghost" onClick={() => setView("history")}><History size={13}/> History</button>
+          <button className="ft-btn ft-btn-ghost" onClick={openPlanWeek}><CalendarDays size={13}/> Plan next 7 days</button>
           <button className="ft-btn ft-btn-ghost" onClick={changeSplit}><RotateCcw size={13}/> Change split</button>
         </div>
       </div>
@@ -698,8 +814,11 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         // but which day-type gets trained there is your call instead of
         // the split's calendar pattern deciding for you. Once it's
         // actually been logged, it behaves like any other day again
-        // (reopen to edit, shows whatever was really done).
-        const isOptionalSlot = day.i === 3 && !day.isDone;
+        // (reopen to edit, shows whatever was really done). A custom
+        // plan for that date always wins over the generic Optional Day
+        // picker — you already made the call in advance, tapping the
+        // card should open what you built, not ask you to pick again.
+        const isOptionalSlot = day.i === 3 && !day.isDone && !day.isCustomPlanned;
         return (
           <div key={day.i} className="ft-card" onClick={() => isOptionalSlot ? setOptionalDayPickerOpen(day) : openDay(day)} style={{
             padding:14, marginBottom:10, cursor:"pointer",
@@ -717,8 +836,12 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                   </>
                 ) : (
                   <>
-                    <div style={{ fontSize:15, fontWeight:700, marginTop:2, color: day.isRest ? C.creamDim : ac }}>{day.isRest ? "Rest Day" : `${day.dayType} Day`}</div>
+                    <div style={{ fontSize:15, fontWeight:700, marginTop:2, color: day.isRest ? C.creamDim : ac, display:"flex", alignItems:"center", gap:6 }}>
+                      {day.isRest ? "Rest Day" : `${day.dayType} Day`}
+                      {day.isCustomPlanned && <Target size={12} color={C.ember} title="Custom planned day" />}
+                    </div>
                     {!day.isRest && day.def && <div style={{ fontSize:11, color:C.creamDim }}>{day.def.groups.map(g=>g.n).join(" · ")}</div>}
+                    {!day.isRest && !day.def && day.customExercises && <div style={{ fontSize:11, color:C.creamDim }}>{day.customExercises.map(e=>e.exercise).join(" · ")}</div>}
                   </>
                 )}
                 {day.isDone && <div style={{ fontSize:10, color:C.lime, marginTop:2 }}>{day.dayType} Day completed · {day.dateStr} · {day.loggedSessions.length} exercise{day.loggedSessions.length!==1?"s":""}</div>}
@@ -1156,6 +1279,107 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       </div>
     );
   }
+
+  if (view === "planWeek" && planDrafts) return (
+    <div>
+      <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("locked")}><ArrowLeft size={13}/> Back</button>
+      <div style={{ fontSize:20, fontWeight:800, marginBottom:4 }}>Plan your next 7 days</div>
+      <div style={{ fontSize:11.5, color:C.creamDim, marginBottom:16, lineHeight:1.5 }}>
+        Build out exactly what each day should look like ahead of time — your own exercises, your own day names, or mark it Rest. Once locked in, these dates override your regular split until they pass; walk into the gym and just log weight and reps.
+      </div>
+
+      {customSplitTemplates && customSplitTemplates.length > 0 && (
+        <div className="ft-card" style={{ padding:14, marginBottom:14 }}>
+          <div style={{ fontSize:11.5, fontWeight:700, color:C.creamDim, marginBottom:8, textTransform:"uppercase", letterSpacing:"0.03em" }}>Load from a saved plan</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {customSplitTemplates.map(t => (
+              <div key={t.id} style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <button className="ft-btn ft-btn-ghost" style={{ flex:1, justifyContent:"flex-start" }} onClick={() => applyTemplate(t)}>
+                  <BookmarkPlus size={13}/> {t.name}
+                </button>
+                <button onClick={() => onDeleteCustomSplitTemplate?.(t.id)} aria-label={`Delete ${t.name}`} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer", padding:4 }}><XIcon size={13}/></button>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize:10.5, color:C.creamDim, marginTop:8 }}>Loading a saved plan fills in the days below — you can still tweak anything before locking it in.</div>
+        </div>
+      )}
+
+      {Array.from({ length:7 }, (_, i) => addDays(today, i)).map(date => {
+        const dateKey = localDateStr(date);
+        const draft = planDrafts[dateKey];
+        const search = planSearch[dateKey] || "";
+        const q = search.trim().toLowerCase();
+        const matches = q ? OFF_SPLIT_EXERCISES.filter(e => e.exercise.toLowerCase().includes(q)).slice(0, 6) : [];
+        const alreadyPlanned = !!customDayPlans?.[dateKey];
+
+        return (
+          <div key={dateKey} className="ft-card" style={{ padding:14, marginBottom:10 }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+              <div style={{ fontWeight:700, fontSize:13 }}>{fmtDay(date)}</div>
+              <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:C.creamDim, cursor:"pointer" }}>
+                <input type="checkbox" checked={draft.isRest} onChange={e => updateDraft(dateKey, { isRest: e.target.checked })} />
+                Rest day
+              </label>
+            </div>
+
+            {!draft.isRest && (
+              <>
+                <input className="ft-input" placeholder="Day name (e.g. Push Day)" value={draft.dayType} onChange={e => updateDraft(dateKey, { dayType: e.target.value })} style={{ marginBottom:8 }} />
+
+                {draft.exercises.length > 0 && (
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8 }}>
+                    {draft.exercises.map(ex => (
+                      <span key={ex.exercise} style={{ display:"flex", alignItems:"center", gap:4, fontSize:11.5, background:C.raised, border:`1px solid ${C.border}`, borderRadius:999, padding:"4px 6px 4px 10px" }}>
+                        {ex.exercise}
+                        <button onClick={() => removeDraftExercise(dateKey, ex.exercise)} aria-label={`Remove ${ex.exercise}`} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer", display:"flex" }}><XIcon size={11}/></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <input className="ft-input" placeholder="Search exercises to add…" value={search} onChange={e => setPlanSearch(prev => ({ ...prev, [dateKey]: e.target.value }))} />
+                {matches.length > 0 && (
+                  <div style={{ display:"flex", flexDirection:"column", gap:4, marginTop:6 }}>
+                    {matches.map(m => (
+                      <button
+                        key={m.exercise}
+                        onClick={() => addDraftExercise(dateKey, m)}
+                        style={{ display:"flex", justifyContent:"space-between", background:C.raised, border:`1px solid ${C.border}`, borderRadius:6, padding:"7px 10px", color:C.cream, fontSize:12, cursor:"pointer", textAlign:"left" }}
+                      >
+                        <span>{m.exercise}</span>
+                        <span style={{ color:C.creamDim, fontSize:10, textTransform:"uppercase", letterSpacing:"0.03em" }}>{m.group}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {alreadyPlanned && (
+              <button className="ft-btn ft-btn-ghost" style={{ fontSize:10.5, marginTop:10, padding:"4px 10px" }} onClick={() => clearPlannedDay(dateKey)}>Clear this day's plan</button>
+            )}
+          </div>
+        );
+      })}
+
+      <div className="ft-card" style={{ padding:14, marginBottom:14 }}>
+        {templatePromptOpen ? (
+          <div style={{ display:"flex", gap:8 }}>
+            <input className="ft-input" placeholder="Name this plan (e.g. My PPL)" value={templateNameInput} onChange={e => setTemplateNameInput(e.target.value)} onFocus={e => e.target.select()} style={{ flex:1 }} autoFocus />
+            <button className="ft-btn ft-btn-primary" style={{ padding:"0 12px" }} disabled={!templateNameInput.trim()} onClick={saveAsTemplate}>Save</button>
+            <button className="ft-btn ft-btn-ghost" style={{ padding:"0 10px" }} onClick={() => setTemplatePromptOpen(false)}>Cancel</button>
+          </div>
+        ) : (
+          <button className="ft-btn ft-btn-ghost" style={{ width:"100%" }} onClick={() => setTemplatePromptOpen(true)}>
+            <BookmarkPlus size={13}/> Save this week as a reusable plan
+          </button>
+        )}
+      </div>
+
+      <button className="ft-btn ft-btn-primary" style={{ width:"100%" }} onClick={lockInWeek}><Check size={14}/> Lock in this week</button>
+    </div>
+  );
 
   if (view === "history") return (
     <div>

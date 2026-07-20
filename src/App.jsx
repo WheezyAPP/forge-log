@@ -71,6 +71,12 @@ import {
   loadMaxAttempts,
   insertMaxAttempt,
   deleteMaxAttempt,
+  loadCustomDayPlans,
+  saveCustomDayPlan,
+  deleteCustomDayPlan,
+  loadCustomSplitTemplates,
+  saveCustomSplitTemplate,
+  deleteCustomSplitTemplate,
   getUserSplitId,
   getUserSplitStartedOn,
   setUserSplitId,
@@ -1051,6 +1057,8 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   const [creatineInput, setCreatineInput] = useState("");
   const [workoutSessions, setWorkoutSessions] = useState([]);
   const [maxAttempts, setMaxAttempts] = useState([]);
+  const [customDayPlans, setCustomDayPlans] = useState({});
+  const [customSplitTemplates, setCustomSplitTemplates] = useState([]);
   const [weighIns, setWeighIns] = useState({});  // { "2026-07-01": [{id,time,weight,tag},...] }
   const [userSplitId, setUserSplitIdState] = useState(null);
   const [partnerMode, setPartnerMode] = useState(false);
@@ -1066,10 +1074,10 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
   useEffect(() => {
     (async () => {
-      const [p, e, ws, splitId, splitStart, ma] = await Promise.all([
+      const [p, e, ws, splitId, splitStart, ma, cdp, cst] = await Promise.all([
         loadProfile(userId), loadEntries(userId),
         loadWorkoutSessions(userId), getUserSplitId(userId), getUserSplitStartedOn(userId),
-        loadMaxAttempts(userId),
+        loadMaxAttempts(userId), loadCustomDayPlans(userId), loadCustomSplitTemplates(userId),
       ]);
       setProfile(p);
       setEntries(e);
@@ -1077,6 +1085,8 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       setUserSplitIdState(splitId);
       setSplitStartedOn(splitStart);
       setMaxAttempts(ma);
+      setCustomDayPlans(cdp);
+      setCustomSplitTemplates(cst);
       setLoaded(true);
     })();
   }, [userId]);
@@ -1197,6 +1207,23 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
     }
     setEntries(next);
     await Promise.all(rows.map(row => saveEntry(userId, row.date, next[row.date])));
+  }
+
+  async function handleSaveCustomDayPlan(plan) {
+    const saved = await saveCustomDayPlan(userId, plan);
+    if (saved) setCustomDayPlans(prev => ({ ...prev, [plan.date]: saved }));
+  }
+  async function handleDeleteCustomDayPlan(date) {
+    setCustomDayPlans(prev => { const next = { ...prev }; delete next[date]; return next; });
+    await deleteCustomDayPlan(userId, date);
+  }
+  async function handleSaveCustomSplitTemplate(template) {
+    const saved = await saveCustomSplitTemplate(userId, template);
+    if (saved) setCustomSplitTemplates(prev => [...prev, saved]);
+  }
+  async function handleDeleteCustomSplitTemplate(id) {
+    setCustomSplitTemplates(prev => prev.filter(t => t.id !== id));
+    await deleteCustomSplitTemplate(userId, id);
   }
 
   async function handleSave() {
@@ -1684,6 +1711,12 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
             subTab={tab}
             setTab={setTab}
             dedicatedProgressiveOverload={profile.dedicatedProgressiveOverload}
+            customDayPlans={customDayPlans}
+            onSaveCustomDayPlan={handleSaveCustomDayPlan}
+            onDeleteCustomDayPlan={handleDeleteCustomDayPlan}
+            customSplitTemplates={customSplitTemplates}
+            onSaveCustomSplitTemplate={handleSaveCustomSplitTemplate}
+            onDeleteCustomSplitTemplate={handleDeleteCustomSplitTemplate}
           />
         </>
       )}
