@@ -90,12 +90,14 @@ function getLastWaterLogMs(entry, dateStr, timeZone) {
 
 // ---------- Sending ----------
 async function sendToUser(supabase, subs, payload, category, userId, dateStr) {
+  let anySucceeded = false;
   for (const sub of subs) {
     try {
       await webpush.sendNotification(
         { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
         JSON.stringify(payload)
       );
+      anySucceeded = true;
     } catch (e) {
       // 404/410 means the browser has permanently invalidated this
       // subscription (uninstalled, cleared data, revoked permission) —
@@ -108,10 +110,19 @@ async function sendToUser(supabase, subs, payload, category, userId, dateStr) {
       }
     }
   }
-  await supabase.from("notification_log").upsert(
-    { user_id: userId, category, date: dateStr, last_sent_at: new Date().toISOString() },
-    { onConflict: "user_id,category,date" }
-  );
+  // Only mark today's category as "sent" if a push genuinely went
+  // through to at least one device — previously this ran unconditionally,
+  // so a transient failure (not a permanent 404/410) would still silence
+  // that category for the rest of the day even though nobody was
+  // actually notified. A day with zero working subscriptions correctly
+  // gets no log entry, and the next scheduler run tries again.
+  if (anySucceeded) {
+    await supabase.from("notification_log").upsert(
+      { user_id: userId, category, date: dateStr, last_sent_at: new Date().toISOString() },
+      { onConflict: "user_id,category,date" }
+    );
+  }
+  return anySucceeded;
 }
 
 export default async function handler(req, res) {
@@ -134,6 +145,31 @@ export default async function handler(req, res) {
   if (subError) return res.status(500).json({ error: subError.message });
   if (!subscriptions?.length) return res.status(200).json({ ...results, note: "no subscriptions" });
 
+  // Bypass mode — ?test=true sends a real notification to every
+  // subscribed device immediately, skipping all the water/weight/food
+  // rule checks entirely. Exists specifically for confirming the full
+  // pipeline works (permission granted -> subscription saved -> this
+  // endpoint -> push service -> service worker -> notification shown)
+  // without needing to wait for a real trigger condition (goal not met,
+  // enough time passed) to naturally line up.
+  if (req.query?.test === "true") {
+    for (const sub of subscriptions) {
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          JSON.stringify({ title: "Test notification", body: "If you can see this, the whole pipeline works.", url: "/" })
+        );
+        results.sent.push({ userId: sub.user_id, category: "test" });
+      } catch (e) {
+        if (e.statusCode === 404 || e.statusCode === 410) {
+          await supabase.from("push_subscriptions").delete().eq("endpoint", sub.endpoint);
+        }
+        results.sent.push({ userId: sub.user_id, category: "test", error: e.message });
+      }
+    }
+    return res.status(200).json({ ...results, mode: "test" });
+  }
+
   const byUser = {};
   for (const sub of subscriptions) (byUser[sub.user_id] ||= []).push(sub);
 
@@ -151,19 +187,26 @@ export default async function handler(req, res) {
     const sentMap = Object.fromEntries((sentToday || []).map(r => [r.category, new Date(r.last_sent_at).getTime()]));
 
     // ---- Weight: two one-shot checkpoints, 4am and 10am local time ----
+    // Bounded windows (>= 4am AND < 10am, vs >= 10am), not a fallback
+    // chain — a fallback ("try 4am first, only fall back to 10am if
+    // already sent") meant a subscriber's very first-ever check of the
+    // day landing after 10am (new subscriber, or a gap in the scheduler)
+    // would get the "morning" message hours late instead of the
+    // "still haven't logged" one. Bounded windows pick the right message
+    // for whatever time it actually is, independent of send history.
     const weightLogged = entry?.weight != null;
     if (!weightLogged) {
-      if (minutesSinceMidnight >= 4 * 60 && !sentMap.weight_4am) {
+      if (minutesSinceMidnight >= 4 * 60 && minutesSinceMidnight < 10 * 60 && !sentMap.weight_4am) {
         await sendToUser(supabase, subs, {
-          title: "Morning weigh-in",
-          body: "First thing before you eat or drink anything — log today's weight.",
+          title: "Weigh-in time",
+          body: "Dude, log your weight.",
           url: "/?tab=weighin",
         }, "weight_4am", userId, dateStr);
         results.sent.push({ userId, category: "weight_4am" });
       } else if (minutesSinceMidnight >= 10 * 60 && !sentMap.weight_10am) {
         await sendToUser(supabase, subs, {
-          title: "Still haven't logged your weight",
-          body: "Quick one — log today's weight when you get a chance.",
+          title: "Still no weigh-in",
+          body: "Dude, for real — log your weight.",
           url: "/?tab=weighin",
         }, "weight_10am", userId, dateStr);
         results.sent.push({ userId, category: "weight_10am" });
@@ -171,18 +214,25 @@ export default async function handler(req, res) {
     }
 
     // ---- Water: repeating every 2h, 9am-10pm, stops once the goal's hit ----
+    // Gated on a goal actually existing — previously "no goal set" meant
+    // waterGoalMet could never become true, so someone who's never
+    // configured a water goal would get nagged every 2 hours forever
+    // with no way to ever complete the day. No goal means nothing to
+    // measure progress against, so no reminder at all now, same as how
+    // food and weight naturally have nothing to check without their own
+    // reference points.
     const waterGoalOz = profile?.water_goal_oz || 0;
     const waterTotalOz = (entry?.water_logs || []).reduce((s, w) => s + (parseFloat(w.amountOz) || 0), 0);
-    const waterGoalMet = waterGoalOz > 0 && waterTotalOz >= waterGoalOz;
-    if (!waterGoalMet && minutesSinceMidnight >= 9 * 60 && minutesSinceMidnight <= 22 * 60) {
+    const waterGoalMet = waterTotalOz >= waterGoalOz;
+    if (waterGoalOz > 0 && !waterGoalMet && minutesSinceMidnight >= 9 * 60 && minutesSinceMidnight <= 22 * 60) {
       const windowStartMs = zonedTimeToUtcMs(dateStr, "09:00", timeZone);
       const lastLogMs = getLastWaterLogMs(entry, dateStr, timeZone) ?? windowStartMs;
       const lastSentMs = sentMap.water ?? 0;
       const referenceMs = Math.max(lastLogMs, lastSentMs);
       if (nowMs - referenceMs >= 2 * 60 * 60 * 1000) {
         await sendToUser(supabase, subs, {
-          title: "Water check-in",
-          body: waterTotalOz > 0 ? `${Math.round(waterTotalOz)} oz so far today — keep it going.` : "Nothing logged yet today — grab some water.",
+          title: "Water time",
+          body: waterTotalOz > 0 ? `${Math.round(waterTotalOz)} oz down — keep sponging, dude.` : "Let's drink some water like a sponge, dude.",
           url: "/?tab=water",
         }, "water", userId, dateStr);
         results.sent.push({ userId, category: "water" });
@@ -193,15 +243,22 @@ export default async function handler(req, res) {
     const calorieGoal = entry?.suggested_calories || 0;
     const caloriesConsumed = entry?.calories_consumed || 0;
     const calorieGoalMet = calorieGoal > 0 && caloriesConsumed >= calorieGoal;
-    const { data: latestWeightRow } = await supabase
-      .from("entries").select("weight").eq("user_id", userId).not("weight", "is", null)
-      .order("date", { ascending: false }).limit(1).maybeSingle();
-    // Mirrors computeStats' formula in App.jsx (proteinG = weightLbs * 1.0)
-    // — deliberately not the full TDEE calculation, just this one trivial
-    // line, to avoid a second, driftable copy of the real logic.
-    const proteinGoal = (latestWeightRow?.weight || 0) * 1.0;
-    const proteinConsumed = entry?.protein || 0;
-    const proteinGoalMet = proteinGoal > 0 && proteinConsumed >= proteinGoal;
+    // Only bother looking up the protein side if calories alone haven't
+    // already settled it — previously this ran on every single check for
+    // every user, including the common case where the calorie goal was
+    // already hit and the block was about to be skipped anyway.
+    let proteinGoalMet = false;
+    if (!calorieGoalMet) {
+      const { data: latestWeightRow } = await supabase
+        .from("entries").select("weight").eq("user_id", userId).not("weight", "is", null)
+        .order("date", { ascending: false }).limit(1).maybeSingle();
+      // Mirrors computeStats' formula in App.jsx (proteinG = weightLbs * 1.0)
+      // — deliberately not the full TDEE calculation, just this one trivial
+      // line, to avoid a second, driftable copy of the real logic.
+      const proteinGoal = (latestWeightRow?.weight || 0) * 1.0;
+      const proteinConsumed = entry?.protein || 0;
+      proteinGoalMet = proteinGoal > 0 && proteinConsumed >= proteinGoal;
+    }
     if (!calorieGoalMet && !proteinGoalMet && minutesSinceMidnight >= 9 * 60 && minutesSinceMidnight <= 21 * 60) {
       const windowStartMs = zonedTimeToUtcMs(dateStr, "09:00", timeZone);
       const lastLogMs = getLastFoodLogMs(entry) ?? windowStartMs;
