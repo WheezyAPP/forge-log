@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Dumbbell, ChevronDown, ChevronUp, CalendarDays, Target, Check, RotateCcw,
   Repeat, ExternalLink, X as XIcon, ChevronRight, ArrowLeft, History, Trophy,
-  AlertTriangle, TrendingUp, Plus, Trash2, Moon, Zap, Lock, Users, Eye, Search, BookmarkPlus,
+  AlertTriangle, TrendingUp, Plus, Trash2, Moon, Zap, Lock, Users, Eye, Search, BookmarkPlus, List,
 } from "lucide-react";
 import {
   SPLITS, pickExercises, getFixedProgram, EX, WEAK_POINT_OPTIONS, WEAK_POINT_MAX_PICKS,
@@ -231,6 +231,11 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   // to tweak a day doesn't mean starting over) the moment it opens.
   const [planDrafts, setPlanDrafts] = useState(null);
   const [planSearch, setPlanSearch] = useState({});
+  // Holds the dateKey of whichever day's card opened the full A-Z browse
+  // modal (null when closed) — lets someone scan every exercise in the
+  // database instead of only typing a search, same OFF_SPLIT_EXERCISES
+  // list already used for search, just unfiltered and grouped by letter.
+  const [browseOpen, setBrowseOpen] = useState(null);
 
   function openPlanWeek() {
     const drafts = {};
@@ -1338,7 +1343,10 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                   </div>
                 )}
 
-                <input className="ft-input" placeholder="Search exercises to add…" value={search} onChange={e => setPlanSearch(prev => ({ ...prev, [dateKey]: e.target.value }))} />
+                <div style={{ display:"flex", gap:6 }}>
+                  <input className="ft-input" placeholder="Search exercises to add…" value={search} onChange={e => setPlanSearch(prev => ({ ...prev, [dateKey]: e.target.value }))} style={{ flex:1 }} />
+                  <button className="ft-btn ft-btn-ghost" style={{ padding:"0 10px" }} title="Browse every exercise A–Z" onClick={() => setBrowseOpen(dateKey)}><List size={13}/></button>
+                </div>
                 {matches.length > 0 && (
                   <div style={{ display:"flex", flexDirection:"column", gap:4, marginTop:6 }}>
                     {matches.map(m => (
@@ -1362,6 +1370,57 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
           </div>
         );
       })}
+
+      {browseOpen && planDrafts[browseOpen] && (() => {
+        const dateKey = browseOpen;
+        const draft = planDrafts[dateKey];
+        const [by, bm, bd] = dateKey.split("-").map(Number);
+        const dayLabel = fmtDay(new Date(by, bm - 1, bd));
+        const addedSet = new Set(draft.exercises.map(e => e.exercise));
+        // OFF_SPLIT_EXERCISES is already sorted alphabetically at module
+        // load — this just buckets that same sorted list by first letter
+        // so the modal reads as an A-Z index instead of one long scroll.
+        const grouped = {};
+        for (const item of OFF_SPLIT_EXERCISES) {
+          const letter = /^[A-Za-z]/.test(item.exercise) ? item.exercise[0].toUpperCase() : "#";
+          (grouped[letter] ||= []).push(item);
+        }
+        const letters = Object.keys(grouped).sort();
+        return (
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }} onClick={e => { if (e.target===e.currentTarget) setBrowseOpen(null); }}>
+            <div className="ft-card" style={{ padding:18, maxWidth:420, width:"100%", maxHeight:"78vh", overflowY:"auto", overscrollBehavior:"contain" }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4 }}>
+                <div style={{ fontWeight:700, fontSize:13, display:"flex", alignItems:"center", gap:6 }}><List size={14} color={C.ember}/> All exercises A–Z</div>
+                <button onClick={() => setBrowseOpen(null)} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={14}/></button>
+              </div>
+              <div style={{ fontSize:10.5, color:C.creamDim, marginBottom:12 }}>For {dayLabel} — tap to add, tap again to remove.</div>
+              {letters.map(letter => (
+                <div key={letter} style={{ marginBottom:10 }}>
+                  <div style={{ fontSize:10.5, fontWeight:800, color:C.ember, letterSpacing:"0.05em", marginBottom:4, paddingLeft:2 }}>{letter}</div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    {grouped[letter].map(item => {
+                      const added = addedSet.has(item.exercise);
+                      return (
+                        <button
+                          key={item.exercise}
+                          onClick={() => added ? removeDraftExercise(dateKey, item.exercise) : addDraftExercise(dateKey, item)}
+                          style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, background: added ? "rgba(79,173,255,0.12)" : C.raised, border:`1px solid ${added ? C.ember : C.border}`, borderRadius:6, padding:"7px 10px", color:C.cream, fontSize:12, cursor:"pointer", textAlign:"left" }}
+                        >
+                          <span style={{ display:"flex", alignItems:"center", gap:6 }}>
+                            {added && <Check size={12} color={C.ember} />}
+                            {item.exercise}
+                          </span>
+                          <span style={{ color:C.creamDim, fontSize:10, textTransform:"uppercase", letterSpacing:"0.03em", whiteSpace:"nowrap" }}>{item.group}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="ft-card" style={{ padding:14, marginBottom:14 }}>
         {templatePromptOpen ? (
