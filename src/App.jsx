@@ -230,6 +230,26 @@ function weightedSlope(dateValuePairs, halfLifeDays, asOfDate) {
   return (sw * swxy - swx * swy) / denom;
 }
 
+// Plain ordinary-least-squares slope — every day weighted equally,
+// unlike weightedSlope above. Used ONLY by the trend-stability check
+// inside computeAdaptiveTDEE (comparing two calendar halves of the
+// window against each other); the actual TDEE number always comes from
+// weightedSlope. See the comment at trendStable's calculation for why
+// an unweighted comparison is what's needed there.
+function uniformSlope(dateValuePairs) {
+  if (dateValuePairs.length < 2) return 0;
+  const anchor = dateValuePairs[0][0];
+  const xs = dateValuePairs.map(([d]) => daysBetweenDateStrs(anchor, d));
+  const ys = dateValuePairs.map(([, y]) => y);
+  const n = xs.length;
+  const sx = xs.reduce((a, x) => a + x, 0), sy = ys.reduce((a, y) => a + y, 0);
+  const sxx = xs.reduce((a, x) => a + x * x, 0);
+  const sxy = xs.reduce((a, x, i) => a + x * ys[i], 0);
+  const denom = n * sxx - sx * sx;
+  if (Math.abs(denom) < 1e-9) return 0;
+  return (n * sxy - sx * sy) / denom;
+}
+
 // Data-driven maintenance estimate — infers TDEE from what actually
 // happened (logged weight + intake) rather than only a formula, the
 // same general idea used across applied nutrition sources. Verified
@@ -369,6 +389,42 @@ function computeAdaptiveTDEE(entries, goalType, lookbackDays = ADAPTIVE_TDEE_LOO
   const spanConfidence = Math.min(100, (daysSpan / lookbackDays) * 100);
   const confidence = Math.round(Math.min(daysConfidence, spanConfidence));
 
+  // Confidence above only measures data COMPLETENESS — it says nothing
+  // about whether the deficit/surplus itself has been constant over the
+  // window, which is what the underlying linear-slope math actually
+  // assumes. A rate that's still accelerating (same intake, faster loss
+  // as the days go by — the exact pattern that inflated a real early-
+  // mini-cut reading by ~550 cal before the weight-smoothing fix above)
+  // will happily hit 100% confidence while still being actively
+  // distorted by water/glycogen catching up to a newly-tightened diet.
+  //
+  // Deliberately UNWEIGHTED (uniformSlope, not weightedSlope) for both
+  // halves here — comparing two recency-weighted slopes against each
+  // other was tried first and didn't work: weightedSlope already leans
+  // toward recent data even over the "full window," so it and a
+  // recent-half slope end up too similar to each other to expose real
+  // acceleration. A plain calendar-half split catches it (confirmed
+  // against Dion's real logged data — correctly flags — and a synthetic
+  // steady 1 lb/week loss with realistic daily noise — correctly
+  // doesn't).
+  let trendStable = true;
+  let secondHalfRateLbsPerWeek = null;
+  const halfIdx = Math.ceil(windowDates.length / 2);
+  const firstHalfDates = windowDates.slice(0, halfIdx);
+  const secondHalfDates = windowDates.slice(halfIdx);
+  if (firstHalfDates.length >= 3 && secondHalfDates.length >= 3) {
+    const firstRateWk = uniformSlope(firstHalfDates.map(d => [d, smoothedWeightByDate[d]])) * 7;
+    const secondRateWk = uniformSlope(secondHalfDates.map(d => [d, smoothedWeightByDate[d]])) * 7;
+    secondHalfRateLbsPerWeek = secondRateWk;
+    const signFlipped = Math.sign(firstRateWk) !== Math.sign(secondRateWk) && Math.abs(firstRateWk) > 0.15;
+    // "Meaningfully bigger": at least 30% larger in magnitude AND at
+    // least half a pound/week of actual difference — the absolute floor
+    // guards against flagging trivial noise around a near-zero rate.
+    const accelerated = Math.abs(secondRateWk) > Math.abs(firstRateWk) * 1.3
+      && Math.abs(secondRateWk - firstRateWk) > 0.5;
+    trendStable = !(signFlipped || accelerated);
+  }
+
   return {
     ready: true,
     tdee: impliedTdee,
@@ -377,6 +433,8 @@ function computeAdaptiveTDEE(entries, goalType, lookbackDays = ADAPTIVE_TDEE_LOO
     daysSpan,
     daysLogged: windowDates.length,
     confidence,
+    trendStable,
+    secondHalfRateLbsPerWeek,
     energyDensity,
   };
 }
@@ -1088,6 +1146,14 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   const [loaded, setLoaded] = useState(false);
   const [profile, setProfile] = useState(DEFAULT_PROFILE);
   const [entries, setEntries] = useState({});
+  // Mirrors `entries` for the handful of call sites (below) that need
+  // the actual latest state after an await, not whatever `entries` this
+  // particular closure happened to capture at render time — same class
+  // of staleness as the mergeAndSaveEntry race, just lower-stakes here
+  // since it only affects which OTHER dates' data feed the adaptive TDEE
+  // window on this one recompute, not any data actually being lost.
+  const entriesRef = useRef(entries);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
   // "idle" | "saving" | "saved" — drives the live Saving.../Saved indicator
   // in LogEntry, set synchronously around every mergeAndSaveEntry call.
   const [saveStatus, setSaveStatus] = useState("idle");
@@ -1101,14 +1167,21 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   // are just gone. navigateTab is the guarded version every nav tap
   // below goes through instead of calling setTab directly.
   const [hasUnsavedWorkout, setHasUnsavedWorkout] = useState(false);
+  // Same pattern, same root cause, different tab: FoodLogTab's meal-entry
+  // fields (label/calories/protein/carbs/fat) are just as invisible to
+  // this nav bar as SplitDashboard's sets were.
+  const [hasUnsavedMealDraft, setHasUnsavedMealDraft] = useState(false);
   function navigateTab(nextTab) {
-    if (hasUnsavedWorkout && nextTab !== tab && !window.confirm("You have unsaved sets on this workout — leave without saving?")) return;
-    // Leaving unmounts whichever SplitDashboard instance set this flag
-    // (or remounts a fresh one, e.g. trainDay <-> splitInfo) — either
-    // way nothing will be left to flip it back off, so clear it here
-    // rather than leaving it stuck true and blocking the next unrelated
-    // nav tap from some other tab entirely.
-    if (nextTab !== tab) setHasUnsavedWorkout(false);
+    if (nextTab === tab) { setTab(nextTab); return; }
+    if (hasUnsavedWorkout && !window.confirm("You have unsaved sets on this workout — leave without saving?")) return;
+    if (hasUnsavedMealDraft && !window.confirm("You have an unsaved meal entry — leave without saving?")) return;
+    // Leaving unmounts whichever instance set these flags (or remounts a
+    // fresh one, e.g. trainDay <-> splitInfo) — either way nothing will
+    // be left to flip them back off, so clear both here rather than
+    // leaving either stuck true and blocking some future, unrelated nav
+    // tap from a completely different tab.
+    setHasUnsavedWorkout(false);
+    setHasUnsavedMealDraft(false);
     setTab(nextTab);
   }
   const [selectedDate, setSelectedDate] = useState(todayStr());
@@ -1350,7 +1423,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       fatLbs: stats.fatLbs,
       suggestedCalories: stats.suggestedCalories,
     });
-    maybeAutoUpdateAdaptiveTdee({ ...entries, [selectedDate]: merged });
+    maybeAutoUpdateAdaptiveTdee({ ...entriesRef.current, [selectedDate]: merged });
   }
 
   async function handleDelete(date) {
@@ -1397,6 +1470,14 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
     if (Date.now() - lastUpdateMs < AUTO_TDEE_COOLDOWN_MS) return; // too soon — wait out the cooldown
     const result = computeAdaptiveTDEE(nextEntries, profile.goalType);
     if (!result.ready || result.confidence < AUTO_TDEE_MIN_CONFIDENCE) return;
+    // Confidence alone isn't enough — it can sit at 100% while the rate
+    // of change is still visibly accelerating/decelerating (water weight
+    // catching up to a recent diet change is the usual cause). Silently
+    // auto-adopting mid-swing is exactly the failure this check exists
+    // to prevent; manual "Update to latest" still bypasses it, since
+    // that's a deliberate, informed choice the same way it bypasses the
+    // confidence floor above.
+    if (!result.trendStable) return;
     const newTdee = Math.round(result.tdee);
     if (newTdee === Math.round(profile.adaptiveTdee)) return; // no real change
     handleProfileChange({ adaptiveTdee: newTdee, adaptiveTdeeSetOn: todayStr(), adaptiveTdeeUpdatedAt: new Date().toISOString() });
@@ -1427,14 +1508,16 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
     setFatInput(String(Math.round(fatG)));
   }
   async function addMeal(meal) {
-    const list = [...mealsForSelectedDate, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, ...meal }];
+    const currentMeals = entriesRef.current[selectedDate]?.meals ?? [];
+    const list = [...currentMeals, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, ...meal }];
     const { cal, prot, carb, fatG } = mealTotals(list);
     const updates = { meals: list, caloriesConsumed: cal, protein: prot, carbs: carb, fat: fatG };
     await mergeAndSaveEntry(selectedDate, updates);
     syncMealInputs(list);
   }
   async function updateMeal(id, changes) {
-    const list = mealsForSelectedDate.map((m) => (m.id === id ? { ...m, ...changes } : m));
+    const currentMeals = entriesRef.current[selectedDate]?.meals ?? [];
+    const list = currentMeals.map((m) => (m.id === id ? { ...m, ...changes } : m));
     const { cal, prot, carb, fatG } = mealTotals(list);
     // Always write the real computed totals — including zero. Skipping
     // zero here was the bug: editing a meal down to genuinely 0 of
@@ -1445,8 +1528,9 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
     syncMealInputs(list);
   }
   async function deleteMeal(id) {
-    const removed = mealsForSelectedDate.find((m) => m.id === id);
-    const list = mealsForSelectedDate.filter((m) => m.id !== id);
+    const currentMeals = entriesRef.current[selectedDate]?.meals ?? [];
+    const removed = currentMeals.find((m) => m.id === id);
+    const list = currentMeals.filter((m) => m.id !== id);
     const { cal, prot, carb, fatG } = mealTotals(list);
     // Always write the real computed totals, including zero — same fix
     // as addMeal/updateMeal. The list.length===0 special case is now
@@ -1484,7 +1568,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   // ── Weigh-In ────────────────────────────────────────────────────────
   async function addWeighIn(date, entry) {
     // entry = { id, time, weight, tag }
-    const list = [...(entries[date]?.weigh_ins ?? []), entry];
+    const list = [...(entriesRef.current[date]?.weigh_ins ?? []), entry];
     // The official weight should be whichever reading is chronologically
     // latest, not necessarily the one just added — backfilling an
     // earlier-in-the-day reading after a later one is normal, and
@@ -1492,12 +1576,13 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
     const sorted = [...list].sort((a, b) => a.time.localeCompare(b.time));
     const officialWeight = parseFloat(sorted[sorted.length - 1].weight);
     const merged = await mergeAndSaveEntry(date, { weigh_ins: list, weight: officialWeight });
-    maybeAutoUpdateAdaptiveTdee({ ...entries, [date]: merged });
+    maybeAutoUpdateAdaptiveTdee({ ...entriesRef.current, [date]: merged });
   }
 
   async function deleteWeighIn(date, id) {
-    const removed = (entries[date]?.weigh_ins ?? []).find(w => w.id === id);
-    const list = (entries[date]?.weigh_ins ?? []).filter(w => w.id !== id);
+    const currentWeighIns = entriesRef.current[date]?.weigh_ins ?? [];
+    const removed = currentWeighIns.find(w => w.id === id);
+    const list = currentWeighIns.filter(w => w.id !== id);
     // Sort by actual time before picking "latest" — weigh-ins aren't
     // always logged in chronological order (backfilling an earlier
     // reading after a later one is normal), so the last item in the
@@ -1507,7 +1592,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
     const patch = { weigh_ins: list };
     if (newWeight) patch.weight = newWeight;
     const merged = await mergeAndSaveEntry(date, patch);
-    maybeAutoUpdateAdaptiveTdee({ ...entries, [date]: merged });
+    maybeAutoUpdateAdaptiveTdee({ ...entriesRef.current, [date]: merged });
     if (removed) {
       toastUndo(`Deleted ${fmt(removed.weight, 1)} lbs weigh-in`, { label: "Undo", onClick: () => addWeighIn(date, removed) });
     }
@@ -1516,12 +1601,20 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   // ── Water log ─────────────────────────────────────────────────────
   async function addWaterLog(date, entry) {
     // entry = { id, time, amountOz }
-    const list = [...(entries[date]?.water_logs ?? []), entry];
+    // entriesRef.current, not entries — logging water is often several
+    // quick taps in a row (a glass, then another glass a minute later),
+    // which is exactly the close-together-calls pattern that made
+    // mergeAndSaveEntry race in the first place. mergeAndSaveEntry
+    // itself is race-safe now, but the water_logs array handed to it
+    // still needs to be built from the latest list, not a render-time
+    // snapshot.
+    const list = [...(entriesRef.current[date]?.water_logs ?? []), entry];
     await mergeAndSaveEntry(date, { water_logs: list });
   }
   async function deleteWaterLog(date, id) {
-    const removed = (entries[date]?.water_logs ?? []).find(w => w.id === id);
-    const list = (entries[date]?.water_logs ?? []).filter(w => w.id !== id);
+    const currentLogs = entriesRef.current[date]?.water_logs ?? [];
+    const removed = currentLogs.find(w => w.id === id);
+    const list = currentLogs.filter(w => w.id !== id);
     await mergeAndSaveEntry(date, { water_logs: list });
     if (removed) {
       toastUndo(`Deleted ${fmt(removed.amountOz)} oz water log`, { label: "Undo", onClick: () => addWaterLog(date, removed) });
@@ -1761,6 +1854,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
           deleteMeal={deleteMeal}
           applyMealTotals={applyMealTotals}
           entries={entries}
+          onDirtyChange={setHasUnsavedMealDraft}
         />
       )}
 
@@ -3021,7 +3115,7 @@ function Row({ label, value, color, bold }) {
    Totals auto-sync to the day's caloriesConsumed and protein.
 ----------------------------------------------------------------*/
 
-function FoodLogTab({ userId, selectedDate, setSelectedDate, meals, addMeal, updateMeal, deleteMeal, applyMealTotals, entries }) {
+function FoodLogTab({ userId, selectedDate, setSelectedDate, meals, addMeal, updateMeal, deleteMeal, applyMealTotals, entries, onDirtyChange }) {
   const [label, setLabel] = useState("");
   const [calories, setCalories] = useState("");
   const [protein, setProtein] = useState("");
@@ -3044,6 +3138,16 @@ function FoodLogTab({ userId, selectedDate, setSelectedDate, meals, addMeal, upd
     if (!userId) return;
     (async () => setPresets(await loadMealPresets(userId)))();
   }, [userId]);
+
+  // Same class of bug as the workout screen's dirty tracking, same fix —
+  // typed-but-unsubmitted meal fields (label, or any of the four macro
+  // inputs) are local state here, invisible to the bottom nav, which
+  // would otherwise unmount this whole tab with zero warning. Cleared by
+  // resetForm() on every successful submit, so "any field non-empty" is
+  // an accurate dirty signal without needing separate tracking.
+  useEffect(() => {
+    onDirtyChange?.(Boolean(label.trim() || calories || protein || carbs || fat));
+  }, [label, calories, protein, carbs, fat, onDirtyChange]);
 
   const totalCal  = meals.reduce((s, m) => s + (parseFloat(m.calories) || 0), 0);
   const totalProt = meals.reduce((s, m) => s + (parseFloat(m.protein)  || 0), 0);
@@ -4835,7 +4939,19 @@ function AdaptiveTdeeCard({ adaptive, profile, latestWeight, onProfileChange }) 
   // actually at right now — comparing against goal weight or some other
   // figure would make the "+X cal" difference meaningless.
   const comparisonWeight = latestWeight || FALLBACK_WEIGHT_ESTIMATE_LBS;
-  const formulaTdee = computeStats(profile, comparisonWeight).formulaTdee;
+  const stats = computeStats(profile, comparisonWeight);
+  const formulaTdee = stats.formulaTdee;
+  // What the CURRENT active target (adaptive if set, else formula) is
+  // actually implying for rate of change, whatever the goal type's own
+  // math looks like — a flat lbs/week for "lose"/"gain", or the 25%-of-
+  // TDEE deficit for "mini_cut" translated back into lbs/week so it's
+  // comparable to what's actually happening on the scale. Nothing here
+  // was previously compared against the REAL observed rate anywhere in
+  // the app — someone could be losing 2-3x their intended rate with no
+  // in-app signal, which is exactly what prompted this card's addition.
+  const impliedTargetRateLbsPerWeek = (profile.goalType === "lose" || profile.goalType === "gain" || profile.goalType === "mini_cut")
+    ? (stats.dailyCalorieAdjustment * 7) / energyDensityFor(profile.goalType)
+    : null;
 
   if (!adaptive.ready) {
     const need = adaptive.minRequired;
@@ -4881,6 +4997,18 @@ function AdaptiveTdeeCard({ adaptive, profile, latestWeight, onProfileChange }) 
         </div>
         <span style={{ fontSize: 10, color: confColor, fontWeight: 700, whiteSpace: "nowrap" }}>{confLabel}</span>
       </div>
+      {!adaptive.trendStable && (
+        // Confidence (above) only measures data completeness — it can sit
+        // at 100% while the trend itself is still moving, which is
+        // exactly what this catches: the rate of change picked up
+        // partway through the window instead of holding steady. Usually
+        // means water/glycogen is still catching up to a recent diet
+        // change, not a real jump in maintenance — worth letting it
+        // settle before adopting, not a sign anything's broken.
+        <div className="ft-card-raised" style={{ padding: "8px 10px", marginTop: 8, fontSize: 10.5, color: COLORS.amber, lineHeight: 1.4 }}>
+          Trend not settled yet — the rate over the last half of this window ({adaptive.secondHalfRateLbsPerWeek > 0 ? "+" : ""}{fmt(adaptive.secondHalfRateLbsPerWeek, 2)} lbs/wk) is notably different from earlier in it. Often means water weight catching up to a recent change, not a real shift in maintenance — this number may keep moving for another week or two.
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${COLORS.border}` }}>
         <div>
           <div style={{ fontSize: 9.5, color: COLORS.creamDim, textTransform: "uppercase" }}>Weight trend</div>
@@ -4905,6 +5033,28 @@ function AdaptiveTdeeCard({ adaptive, profile, latestWeight, onProfileChange }) 
         Based on {adaptive.daysLogged} logged days, trend spanning ~{adaptive.daysSpan} days.
         {isActive && profile.adaptiveTdeeSetOn && ` Adopted ${prettyDate(profile.adaptiveTdeeSetOn)}.`}
       </div>
+      {impliedTargetRateLbsPerWeek != null && (() => {
+        const actual = adaptive.weightChangeLbsPerWeek;
+        const target = impliedTargetRateLbsPerWeek;
+        // Same direction check as trendStable's sign flip above — only
+        // compare magnitudes when actual and target at least agree on
+        // which way the scale should be moving. 30% over target and at
+        // least 0.3 lbs/wk of real difference, mirroring the thresholds
+        // used for trend stability above, so a rounding-level gap on a
+        // near-zero target doesn't trigger this needlessly.
+        const sameDirection = Math.sign(actual) === Math.sign(target) || Math.abs(target) < 0.05;
+        const runningHot = sameDirection && Math.abs(actual) > Math.abs(target) * 1.3 && Math.abs(actual - target) > 0.3;
+        if (!runningHot) return null;
+        const verb = profile.goalType === "gain" ? "gaining" : "losing";
+        return (
+          <div className="ft-card-raised" style={{ padding: "8px 10px", marginTop: 8, fontSize: 10.5, color: COLORS.amber, lineHeight: 1.4 }}>
+            Actually {verb} {Math.abs(actual).toFixed(2)} lbs/wk — well past the ~{Math.abs(target).toFixed(2)} lbs/wk this target implies.
+            {profile.goalType === "gain"
+              ? " Faster than intended usually means more of it is fat than needed."
+              : " Faster than intended usually costs more muscle than a slower, more controlled deficit would."}
+          </div>
+        );
+      })()}
       {isActive && (
         <div style={{ fontSize: 10, color: COLORS.creamDim, marginTop: 4 }}>
           Refreshes on its own at most every 3 days as you log — tap Update to latest for the newest number right now.
