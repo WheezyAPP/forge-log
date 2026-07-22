@@ -134,7 +134,7 @@ function computePRFlags(sessions) {
   return flags;
 }
 
-export default function SplitDashboard({ userId, userSplitId, splitStartedOn, onSplitChange, workoutSessions, setWorkoutSessions, latestWeight, gender, subTab, setTab, followSource, onBlocksChange, dedicatedProgressiveOverload, customDayPlans, onSaveCustomDayPlan, onDeleteCustomDayPlan, customSplitTemplates, onSaveCustomSplitTemplate, onDeleteCustomSplitTemplate }) {
+export default function SplitDashboard({ userId, userSplitId, splitStartedOn, onSplitChange, workoutSessions, setWorkoutSessions, latestWeight, gender, subTab, setTab, followSource, onBlocksChange, onDirtyChange, dedicatedProgressiveOverload, customDayPlans, onSaveCustomDayPlan, onDeleteCustomDayPlan, customSplitTemplates, onSaveCustomSplitTemplate, onDeleteCustomSplitTemplate }) {
   const [view, setView] = useState("picker");
   const [selected, setSelected] = useState(() => SPLITS.find(s => s.id === userSplitId) || null);
   const [weekNum, setWeekNum] = useState(1);
@@ -144,6 +144,16 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   const [blocks, setBlocks] = useState([]);
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
+  // True whenever `blocks` holds a typed weight/rep, an added/removed/
+  // swapped exercise, etc. that hasn't been through handleSaveDay yet.
+  // Reset to false at every fresh-load entry point into the day view
+  // (openDay/openAdhoc/openFollowPartner/chooseOptionalDayType) and
+  // after a successful save; set true by every function below that
+  // actually mutates blocks in response to something the person typed
+  // or tapped. Reported up via onDirtyChange so the bottom nav (which
+  // lives outside this component and would otherwise unmount it with
+  // zero warning) knows to confirm before switching away.
+  const [dirty, setDirty] = useState(false);
   // Ported from OverloadLog (now retired) — [{exercise, prTypes}], shown
   // as a celebration banner right after a save that beat a prior best.
   const [justSavedPRs, setJustSavedPRs] = useState([]);
@@ -171,6 +181,10 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     if (!onBlocksChange) return;
     onBlocksChange(blocks.map(b => ({ exercise: b.exercise, grp: b.grp, setCount: b.sets.length })));
   }, [blocks, onBlocksChange]);
+
+  useEffect(() => {
+    onDirtyChange?.(view === "day" && dirty);
+  }, [dirty, view, onDirtyChange]);
 
   useEffect(() => {
     const s = SPLITS.find(s => s.id === userSplitId);
@@ -371,9 +385,10 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     buildDayBlocks(day);
     setView("day");
     setJustSaved(false);
+    setDirty(false);
     setJustSavedPRs([]);
   }
-  function openAdhoc(day) { setDayOffset(day.i); setBlocks([]); setView("day"); setJustSaved(false); setJustSavedPRs([]); }
+  function openAdhoc(day) { setDayOffset(day.i); setBlocks([]); setView("day"); setJustSaved(false); setDirty(false); setJustSavedPRs([]); }
 
   // "Follow my partner" — always today, since this only makes sense for
   // a live joint session, not planning out someone else's future days.
@@ -398,6 +413,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     }));
     setView("day");
     setJustSaved(false);
+    setDirty(false);
     setJustSavedPRs([]);
   }
 
@@ -413,6 +429,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     buildDayBlocks({ ...day, dayType: dayTypeName, isRest: false, def, occ: 0 });
     setView("day");
     setJustSaved(false);
+    setDirty(false);
     setJustSavedPRs([]);
     setOptionalDayPickerOpen(null);
   }
@@ -479,6 +496,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
 
   function setVal(bi, si, k, v) {
     setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, sets: b.sets.map((s,j) => j!==si ? s : { ...s, [k]: v }) }));
+    setDirty(true);
   }
   // Bodyweight pull-up variants default to your current logged weight
   // instead of an empty field — assisted variants stay blank here since
@@ -496,9 +514,11 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
 
   function addSet(bi) {
     setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, sets: [...b.sets, { w:"", r:"", rpe:"" }] }));
+    setDirty(true);
   }
   function removeSet(bi, si) {
     setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, sets: b.sets.filter((_,j) => j!==si) }));
+    setDirty(true);
   }
   // Deletes a whole exercise from today's workout — distinct from
   // removeSet, which only drops one set. Needed for split days that
@@ -506,6 +526,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   // legitimate reason to skip one lift without it being "off-split").
   function removeBlock(bi) {
     setBlocks(prev => prev.filter((_, i) => i !== bi));
+    setDirty(true);
   }
   // Opens a group picker instead of silently defaulting to whatever
   // muscle group the current split day happens to be — you're logging
@@ -530,6 +551,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     const sugg = getProgressionSuggestion(history, group, exercise, dismissedAt, dedicatedProgressiveOverload);
     const w = defaultWeightFor(exercise, sugg);
     setBlocks(prev => [...prev, { exercise, grp: group, sets:[{w,r:"",rpe:""}], off:true, sugg, repTarget: sugg?.targetReps }]);
+    setDirty(true);
     closeOffSplitPicker();
   }
   function confirmOffSplitGroup(group) {
@@ -609,6 +631,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     setJustSavedPRs(prs);
     setSaving(false);
     setJustSaved(true);
+    setDirty(false);
   }
 
   // Recovery tool for exactly the stale-date bug that was just fixed:
@@ -932,7 +955,10 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     const ac = day?.def?.color || C.ember;
     return (
       <div>
-        <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("locked")}><ArrowLeft size={13}/> Back</button>
+        <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => {
+          if (dirty && !window.confirm("You have unsaved sets on this workout — leave without saving?")) return;
+          setView("locked");
+        }}><ArrowLeft size={13}/> Back</button>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, marginBottom:10 }}>
           <div style={{ fontSize:16, fontWeight:700, color:ac }}>{day.dateStr} · {day.isRest ? "Off-split" : `${day.dayType} Day`}{day.isDone ? " (editing)" : ""}</div>
           <div className="ft-card-raised" style={{ padding:"5px 10px", fontSize:12, fontWeight:700, color:C.ember }}>{Math.round(totalVol)} lbs total</div>
@@ -1270,6 +1296,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                           const altSugg = getProgressionSuggestion(altHistory, swapOpen.grp, alt, altDismissedAt, dedicatedProgressiveOverload);
                           const swapW = defaultWeightFor(alt, altSugg);
                           setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, exercise:alt, sugg:altSugg, repTarget: altSugg?.targetReps, sets: b.sets.map(s=>({w:swapW,r:""})) }));
+                          setDirty(true);
                           setSwapOpen(null);
                         }} style={{ flex:1, textAlign:"left", background:"none", border:"none", color:C.cream, fontSize:12, fontWeight:600, cursor:"pointer" }}>{alt}</button>
                         {tutUrl && <a href={tutUrl} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{ color:C.ember, display:"flex" }}><ExternalLink size={13}/></a>}

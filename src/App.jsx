@@ -253,6 +253,22 @@ const ADAPTIVE_TDEE_MIN_DAYS = 5; // floor below which even a rough read isn't a
 const WEIGHT_TREND_HALF_LIFE_DAYS = 7;
 const CALORIE_TREND_HALF_LIFE_DAYS = 7;
 const ADAPTIVE_TDEE_LOOKBACK_DAYS = 28;
+// Scale weight swings day-to-day from water, sodium, GI contents, and
+// workout timing — none of which is fat gained or lost, but every raw
+// weigh-in feeds directly into the slope regression below as if it
+// were. A short half-life EWMA ("trend weight," the same technique
+// TrendWeight/Happy Scale/MacroFactor use) washes that out before the
+// regression ever sees it, without needing to know WHAT caused a given
+// day's swing — sodium, hydration, and glycogen all get filtered the
+// same way. 3 days is short enough that a real, sustained trend still
+// comes through clearly inside the 28-day window, but long enough to
+// absorb a single retained-water day (confirmed on Dion's real logged
+// data: a raw-weight regression implied a 3,041-cal TDEE off an
+// accelerating-loss-at-flat-calories pattern — the classic signature of
+// early-cut water loss, not a real jump in maintenance — while the
+// smoothed version pulled that down to ~2,880, still elevated but far
+// less distorted).
+const WEIGHT_SMOOTHING_HALF_LIFE_DAYS = 3;
 
 // Bounds wide enough to never reject a real human, tight enough to
 // catch the failure mode that actually matters: a single implausible
@@ -271,6 +287,35 @@ function isPlausibleAdaptiveDay(e) {
   return e.weight != null && e.caloriesConsumed != null
     && e.weight >= PLAUSIBLE_WEIGHT_LBS[0] && e.weight <= PLAUSIBLE_WEIGHT_LBS[1]
     && e.caloriesConsumed >= PLAUSIBLE_CALORIES[0] && e.caloriesConsumed <= PLAUSIBLE_CALORIES[1];
+}
+
+// Causal EWMA over calendar dates (not array index), so a gap in
+// logging doesn't get treated as consecutive days. Each step blends in
+// `alpha` of the new raw value and keeps `1-alpha` of the running
+// trend, where alpha widens with the gap since the last logged day —
+// go a week without logging and the next point is trusted almost
+// fully, since there's no stale trend worth defending across that
+// large a gap. Seeded from the very first plausible day so the trend
+// has no cold-start bias by the time it reaches the actual lookback
+// window (see how it's called below — smoothed over ALL plausible
+// history, then sliced down to windowDates, not smoothed from a
+// standing start at the window's edge).
+function smoothWeights(dateValuePairs, halfLifeDays) {
+  const retainPerDay = Math.pow(0.5, 1 / halfLifeDays);
+  let trend = null, lastDate = null;
+  const out = [];
+  for (const [date, w] of dateValuePairs) {
+    if (trend == null) {
+      trend = w;
+    } else {
+      const gapDays = daysBetweenDateStrs(lastDate, date);
+      const alpha = 1 - Math.pow(retainPerDay, gapDays);
+      trend = trend + alpha * (w - trend);
+    }
+    lastDate = date;
+    out.push([date, trend]);
+  }
+  return out;
 }
 
 function computeAdaptiveTDEE(entries, goalType, lookbackDays = ADAPTIVE_TDEE_LOOKBACK_DAYS) {
@@ -295,7 +340,14 @@ function computeAdaptiveTDEE(entries, goalType, lookbackDays = ADAPTIVE_TDEE_LOO
     return { ready: false, daysLogged: windowDates.length, minRequired: ADAPTIVE_TDEE_MIN_DAYS };
   }
 
-  const weightPairs = windowDates.map(d => [d, entries[d].weight]);
+  // Smoothed over the FULL plausible history (allDates), not just the
+  // window — seeding the EWMA before windowDates starts means the trend
+  // arriving at the window's own edge is already warmed up, instead of
+  // cold-starting exactly where accuracy matters most for this reading.
+  const smoothedWeightByDate = Object.fromEntries(
+    smoothWeights(allDates.map(d => [d, entries[d].weight]), WEIGHT_SMOOTHING_HALF_LIFE_DAYS)
+  );
+  const weightPairs = windowDates.map(d => [d, smoothedWeightByDate[d]]);
   const calorieePairs = windowDates.map(d => [d, entries[d].caloriesConsumed]);
 
   const ratePerDay = weightedSlope(weightPairs, WEIGHT_TREND_HALF_LIFE_DAYS, asOfDate); // lbs/day, signed
@@ -882,7 +934,22 @@ const GlobalStyle = () => (
        the pill's material rather than a separate light floating
        behind it. Nowhere else in the app uses gold. */
     .ft-nav {
-      position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+      position: fixed; left: 50%; bottom: 18px;
+      /* translateZ(0) (plus will-change/backface-visibility) forces this
+         onto its own GPU compositing layer. Without it, mobile Safari
+         (and some Android browsers) repaint a fixed-position element on
+         the main thread as the page scrolls — and specifically as the
+         address-bar toolbar collapses/expands mid-scroll, that repaint
+         lags a frame or two behind the actual scroll position, so the
+         pill visibly "glides" and then snaps into place once scrolling
+         settles. Promoting it to its own layer means the compositor
+         pins it directly, with no repaint-driven lag to produce that
+         glide in the first place — a rendering-layer fix, since nothing
+         in this app's own JS moves the nav on scroll to begin with. */
+      transform: translateX(-50%) translateZ(0);
+      -webkit-transform: translateX(-50%) translateZ(0);
+      will-change: transform;
+      -webkit-backface-visibility: hidden; backface-visibility: hidden;
       display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 500;
     }
     .ft-nav-primary {
@@ -1026,6 +1093,24 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   const [saveStatus, setSaveStatus] = useState("idle");
   const saveStatusTimeout = useRef(null);
   const [tab, setTab] = useState("home");
+  // Set by SplitDashboard's onDirtyChange while the workout-logging
+  // screen has typed weights/reps that haven't been saved yet. The
+  // bottom nav lives outside that component and calls setTab directly —
+  // without this, tapping any nav item (Settings included) unmounts the
+  // workout screen instantly with zero warning and the in-progress sets
+  // are just gone. navigateTab is the guarded version every nav tap
+  // below goes through instead of calling setTab directly.
+  const [hasUnsavedWorkout, setHasUnsavedWorkout] = useState(false);
+  function navigateTab(nextTab) {
+    if (hasUnsavedWorkout && nextTab !== tab && !window.confirm("You have unsaved sets on this workout — leave without saving?")) return;
+    // Leaving unmounts whichever SplitDashboard instance set this flag
+    // (or remounts a fresh one, e.g. trainDay <-> splitInfo) — either
+    // way nothing will be left to flip it back off, so clear it here
+    // rather than leaving it stuck true and blocking the next unrelated
+    // nav tap from some other tab entirely.
+    if (nextTab !== tab) setHasUnsavedWorkout(false);
+    setTab(nextTab);
+  }
   const [selectedDate, setSelectedDate] = useState(todayStr());
 
   // Notification tap-to-open — api/send-notifications.js sets each
@@ -1176,10 +1261,19 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   // set synchronously (before the await) so the UI reacts immediately,
   // not after the network round-trip.
   async function mergeAndSaveEntry(date, partial) {
-    const existing = entries[date] || {};
-    const merged = { ...existing, ...partial };
-    const next = { ...entries, [date]: merged };
-    setEntries(next);
+    // Functional form deliberately, not `entries[date]` from the render
+    // closure — if two saves for the same day fire close together (e.g.
+    // logging a weigh-in right after toggling creatine) before React
+    // re-renders in between, both calls would otherwise see the same
+    // stale `entries` snapshot, and the second setEntries would silently
+    // overwrite the first's merge instead of building on top of it. The
+    // updater below always sees whatever the latest state actually is.
+    let merged;
+    setEntries(prev => {
+      const existing = prev[date] || {};
+      merged = { ...existing, ...partial };
+      return { ...prev, [date]: merged };
+    });
     setSaveStatus("saving");
     try {
       await saveEntry(userId, date, merged);
@@ -1576,7 +1670,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
               <button
                 key={child.key}
                 className={`ft-nav-sub-item ${tab === child.key ? "active" : ""}`}
-                onClick={() => setTab(child.key)}
+                onClick={() => navigateTab(child.key)}
               >
                 {child.label}
               </button>
@@ -1592,9 +1686,9 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
               onClick={() => {
                 if (group.children) {
                   const alreadyActive = group.children.some((c) => c.key === tab);
-                  if (!alreadyActive) setTab(group.children[0].key);
+                  if (!alreadyActive) navigateTab(group.children[0].key);
                 } else {
-                  setTab(group.key);
+                  navigateTab(group.key);
                 }
               }}
             >
@@ -1725,6 +1819,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
             gender={profile.gender}
             subTab={tab}
             setTab={setTab}
+            onDirtyChange={setHasUnsavedWorkout}
             dedicatedProgressiveOverload={profile.dedicatedProgressiveOverload}
             customDayPlans={customDayPlans}
             onSaveCustomDayPlan={handleSaveCustomDayPlan}

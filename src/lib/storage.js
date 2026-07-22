@@ -150,6 +150,7 @@ const DEFAULT_PROFILE = {
   goalStartedOn: null,
   adaptiveTdee: null,
   adaptiveTdeeSetOn: null,
+  adaptiveTdeeUpdatedAt: null,
   useAdaptiveBodyFat: false,
   showBodyFatPct: null,
   creatineAlreadySaturated: false,
@@ -182,6 +183,14 @@ function profileFromRow(row) {
     goalStartedOn: row.goal_started_on ?? null,
     adaptiveTdee: row.adaptive_tdee ?? null,
     adaptiveTdeeSetOn: row.adaptive_tdee_set_on ?? null,
+    // Was missing from this mapping entirely — the column didn't even
+    // exist in Supabase (added in v30_adaptive_tdee_updated_at). Without
+    // it, this always came back null on a fresh load, so the 72-hour
+    // auto-update cooldown in maybeAutoUpdateAdaptiveTdee (App.jsx) had
+    // no persisted memory of when it last fired: it looked "expired"
+    // immediately after every reload, regardless of how recently it had
+    // actually run in a previous session.
+    adaptiveTdeeUpdatedAt: row.adaptive_tdee_updated_at ?? null,
     useAdaptiveBodyFat: row.use_adaptive_body_fat ?? false,
     showBodyFatPct: row.show_body_fat_pct ?? null,
     creatineAlreadySaturated: row.creatine_already_saturated ?? false,
@@ -206,6 +215,7 @@ function profileToRow(userId, profile) {
     goal_started_on: profile.goalStartedOn ?? null,
     adaptive_tdee: profile.adaptiveTdee ?? null,
     adaptive_tdee_set_on: profile.adaptiveTdeeSetOn ?? null,
+    adaptive_tdee_updated_at: profile.adaptiveTdeeUpdatedAt ?? null,
     use_adaptive_body_fat: profile.useAdaptiveBodyFat ?? false,
     show_body_fat_pct: profile.showBodyFatPct ?? null,
     creatine_already_saturated: profile.creatineAlreadySaturated ?? false,
