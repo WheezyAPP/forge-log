@@ -151,7 +151,7 @@ const DEFAULT_PROFILE = {
   adaptiveTdee: null,
   adaptiveTdeeSetOn: null,
   adaptiveTdeeUpdatedAt: null,
-  useAdaptiveBodyFat: false,
+  bodyFatMethod: "formula", // "formula" | "navy" | "blend"
   showBodyFatPct: null,
   creatineAlreadySaturated: false,
   setCoverageTargets: null,
@@ -191,7 +191,10 @@ function profileFromRow(row) {
     // immediately after every reload, regardless of how recently it had
     // actually run in a previous session.
     adaptiveTdeeUpdatedAt: row.adaptive_tdee_updated_at ?? null,
-    useAdaptiveBodyFat: row.use_adaptive_body_fat ?? false,
+    // v32_body_fat_method added the real 3-way column and backfilled it
+    // from the old boolean for every existing row; the boolean fallback
+    // here only matters for a row that migration somehow missed.
+    bodyFatMethod: row.body_fat_method ?? (row.use_adaptive_body_fat ? "blend" : "formula"),
     showBodyFatPct: row.show_body_fat_pct ?? null,
     creatineAlreadySaturated: row.creatine_already_saturated ?? false,
     setCoverageTargets: row.set_coverage_targets ?? null,
@@ -216,7 +219,10 @@ function profileToRow(userId, profile) {
     adaptive_tdee: profile.adaptiveTdee ?? null,
     adaptive_tdee_set_on: profile.adaptiveTdeeSetOn ?? null,
     adaptive_tdee_updated_at: profile.adaptiveTdeeUpdatedAt ?? null,
-    use_adaptive_body_fat: profile.useAdaptiveBodyFat ?? false,
+    body_fat_method: profile.bodyFatMethod ?? "formula",
+    // Kept in sync for backward compatibility, though nothing in this
+    // app reads it anymore now that body_fat_method exists.
+    use_adaptive_body_fat: profile.bodyFatMethod === "blend",
     show_body_fat_pct: profile.showBodyFatPct ?? null,
     creatine_already_saturated: profile.creatineAlreadySaturated ?? false,
     set_coverage_targets: profile.setCoverageTargets ?? null,
@@ -286,6 +292,16 @@ function entryFromRow(row) {
 }
 
 function entryToRow(userId, date, entry) {
+  // Defensive: a null/undefined entry here previously crashed on
+  // entry.weight (surfaced in the UI as "Last error (saveEntry): null is
+  // not an object (evaluating 'r.weight')" — r being the minified name
+  // for this parameter in the production build). saveEntry now refuses
+  // to even queue a call like that in the first place, but this fallback
+  // also covers offlineExecutors.saveEntry below, which calls this
+  // directly during queue replay and wouldn't go through that guard —
+  // and covers any already-queued op from before that guard existed,
+  // sitting in someone's local queue on an old app version.
+  entry = entry || {};
   return {
     user_id: userId,
     date,
@@ -327,6 +343,10 @@ export async function loadEntries(userId) {
 // Saves a single day's entry (upsert on the user_id+date unique key).
 export async function saveEntry(userId, date, entry) {
   if (!userId) return;
+  if (!entry) {
+    console.error("saveEntry called with no entry data — refusing to save or queue this", { userId, date });
+    return;
+  }
 
   // Mirror into the cache immediately so a reload (even offline) still
   // shows this entry, and so the queued replay has a consistent source.

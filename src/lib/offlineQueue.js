@@ -78,11 +78,23 @@ export function enqueueOp(type, args) {
     type,
     args,
     ts: Date.now(),
+    failCount: 0,
   });
   writeQueue(queue);
 }
 
 let flushing = false;
+// After this many consecutive failures on the SAME op, give up on it
+// specifically rather than retrying forever. A transient issue (offline,
+// Supabase project asleep, a momentary network blip) resolves within a
+// few retries; anything still failing the same way after 5 attempts is
+// something that will never succeed no matter how many more times it's
+// retried — bad/malformed data, a reference to something since deleted,
+// etc. Without this, one bad op blocks every op queued behind it
+// forever, with no self-healing — "Discard queued changes" was the only
+// way out, and only if someone actually finds and taps it.
+
+const MAX_OP_RETRIES = 5;
 
 // executors: { [type]: async (...args) => void }
 // Replays queued operations oldest-first. Stops at the first failure so
@@ -114,9 +126,20 @@ export async function flushQueue(executors) {
         writeQueue(queue);
         madeProgress = true;
       } catch (e) {
-        console.error(`Sync failed for queued "${op.type}", will retry:`, e);
+        const failCount = (op.failCount || 0) + 1;
+        console.error(`Sync failed for queued "${op.type}" (attempt ${failCount}):`, e);
+        if (failCount >= MAX_OP_RETRIES) {
+          console.error(`Giving up on queued "${op.type}" after ${failCount} failed attempts — dropping it so the rest of the queue can proceed:`, op);
+          queue = queue.slice(1);
+          writeQueue(queue);
+          notifyError({ type: op.type, message: `Gave up after ${failCount} attempts: ${e?.message || String(e)}`, dropped: true, ts: Date.now() });
+          madeProgress = true;
+          continue; // keep going — try the next op instead of stopping here
+        }
+        queue[0] = { ...op, failCount };
+        writeQueue(queue);
         notifyError({ type: op.type, message: e?.message || String(e), ts: Date.now() });
-        break; // still failing — stop and retry later, don't hammer it
+        break; // still within retry budget — stop and let it try again later
       }
     }
     if (madeProgress && queue.length === 0) notifyError(null);

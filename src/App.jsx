@@ -116,7 +116,7 @@ const DEFAULT_PROFILE = {
   adaptiveTdee: null, // TDEE derived from your own logged weight+calorie data (energy-balance method), overriding the Mifflin-St Jeor formula when set
   adaptiveTdeeSetOn: null,
   adaptiveTdeeUpdatedAt: null, // precise timestamp (unlike the date-only adaptiveTdeeSetOn) used only to gate the 72-hour auto-update cooldown — set on both manual adoption and automatic recalculation
-  useAdaptiveBodyFat: false, // opt-in for the formula + Navy circumference blend — off by default, same pattern as adaptiveTdee but a plain toggle instead of a frozen snapshot, since body measurements should keep updating the estimate live rather than going stale
+  bodyFatMethod: "formula", // "formula" | "navy" | "blend" — see computeStats for what each does
   showBodyFatPct: null, // null = no explicit choice — defaults to hidden for female, shown for male, since this can be sensitive info; once explicitly set either way it sticks regardless of gender changes
   creatineAlreadySaturated: false, // lets someone already consistently taking creatine before joining skip the "just starting" ramp the 28-day rolling window would otherwise show
   setCoverageTargets: null, // per-muscle weekly set targets: { priority: [up to 2 groups aiming for 20], targets: { group: 10-14 } }; null = defaults
@@ -562,12 +562,24 @@ function computeStats(profile, weightLbs, measurements = {}) {
   const navyBodyFatPct = navyEligible
     ? 86.010 * Math.log10(waistIn - neckIn) - 70.041 * Math.log10(heightIn) + 36.76
     : null;
-  // Blend only actually applies once opted into in Settings — computed
-  // above regardless, so Settings can show the comparison even before
-  // it's turned on.
-  const bodyFatPct = navyBodyFatPct != null && profile.useAdaptiveBodyFat
-    ? 0.65 * formulaBodyFatPct + 0.35 * navyBodyFatPct
-    : formulaBodyFatPct;
+  // Three ways to land on a body fat % — pick one per person in Settings:
+  //   "formula" — weight/height/age/gender only (Deurenberg above). Known
+  //     blind spot: can't tell a muscular build from a fat one at the
+  //     same BMI.
+  //   "navy"    — pure circumference method, no formula blended in at
+  //     all. Trusts the tape measurement completely.
+  //   "blend"   — 65% formula / 35% Navy (the only option that existed
+  //     before this was a real 3-way choice — kept at the same weights).
+  // Falls back to "formula" whenever navy/blend is selected but not
+  // actually eligible yet (no neck+waist logged, or not male — the
+  // women's Navy formula needs hip circumference, not tracked here) so
+  // a stale selection never silently breaks the number.
+  const bodyFatPct = (() => {
+    if (navyBodyFatPct == null) return formulaBodyFatPct;
+    if (profile.bodyFatMethod === "navy") return navyBodyFatPct;
+    if (profile.bodyFatMethod === "blend") return 0.65 * formulaBodyFatPct + 0.35 * navyBodyFatPct;
+    return formulaBodyFatPct;
+  })();
 
   const fatLbs = weightLbs * (bodyFatPct / 100);
   const leanLbs = weightLbs - fatLbs;
@@ -2268,7 +2280,7 @@ function buildCoachNotes({ e, stats, balance, avgBalance, weightDelta, proteinPc
   // Adaptive Body Fat — a one-time nudge once someone's actually logged
   // enough to use it, rather than something they'd have to stumble onto
   // in Settings on their own.
-  if (profile?.gender === "male" && !profile?.useAdaptiveBodyFat && entries) {
+  if (profile?.gender === "male" && (profile?.bodyFatMethod ?? "formula") === "formula" && entries) {
     const neckIn = latestMeasurement(entries, "neck");
     const waistIn = latestMeasurement(entries, "waist");
     if (neckIn && waistIn) {
@@ -2505,8 +2517,9 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
             label="Estimated body fat %"
             value={`${fmt(stats.bodyFatPct, 1)}%`}
             sub={
-              stats.navyEligible && profile.useAdaptiveBodyFat ? "formula + waist/neck blend"
-              : stats.navyEligible ? "blend available — turn on in Settings"
+              stats.navyEligible && profile.bodyFatMethod === "navy" ? "Navy circumference method"
+              : stats.navyEligible && profile.bodyFatMethod === "blend" ? "formula + waist/neck blend"
+              : stats.navyEligible ? "more accurate methods available — see Settings"
               : profile.gender === "male" ? "log neck & waist for a better estimate"
               : "formula-based"
             }
@@ -5082,13 +5095,14 @@ function AdaptiveTdeeCard({ adaptive, profile, latestWeight, onProfileChange }) 
 
 function AdaptiveBodyFatCard({ profile, entries, latestWeight, onProfileChange }) {
   const cardStyle = { padding: 18, maxWidth: 380, flex: 1, minWidth: 280 };
+  const method = profile.bodyFatMethod ?? "formula";
 
   if (profile.gender !== "male") {
     return (
       <div className="ft-card" style={cardStyle}>
-        <div className="ft-label" style={{ marginBottom: 6 }}>Adaptive Body Fat %</div>
+        <div className="ft-label" style={{ marginBottom: 6 }}>Body Fat % Method</div>
         <div style={{ fontSize: 12.5, color: COLORS.creamDim, lineHeight: 1.5 }}>
-          This blend — the formula estimate combined with the U.S. Navy circumference method — is male-only for now. The women's version of the Navy method also needs hip circumference, which isn't tracked yet.
+          The Navy circumference method (and the blend built on it) is male-only for now. The women's version also needs hip circumference, which isn't tracked yet.
         </div>
       </div>
     );
@@ -5097,15 +5111,14 @@ function AdaptiveBodyFatCard({ profile, entries, latestWeight, onProfileChange }
   const neckIn = latestMeasurement(entries, "neck");
   const waistIn = latestMeasurement(entries, "waist");
   const stats = computeStats(profile, latestWeight || FALLBACK_WEIGHT_ESTIMATE_LBS, { neckIn, waistIn });
-  const isActive = profile?.useAdaptiveBodyFat === true;
 
   if (!stats.navyEligible) {
     const missing = [!neckIn && "neck", !waistIn && "waist"].filter(Boolean);
     return (
       <div className="ft-card" style={cardStyle}>
-        <div className="ft-label" style={{ marginBottom: 6 }}>Adaptive Body Fat %</div>
+        <div className="ft-label" style={{ marginBottom: 6 }}>Body Fat % Method</div>
         <div style={{ fontSize: 12.5, color: COLORS.creamDim, lineHeight: 1.5 }}>
-          The formula estimate only knows your weight, height, age, and gender — it can't tell a muscular build from a fat one at the same BMI. Log your neck and waist measurements and this blends in the U.S. Navy circumference method for a more accurate estimate.
+          The formula estimate only knows your weight, height, age, and gender — it can't tell a muscular build from a fat one at the same BMI. Log your neck and waist measurements to unlock the Navy method and the blend.
         </div>
         <div style={{ marginTop: 10, fontSize: 11, color: COLORS.creamDim }}>
           Still need: {missing.join(" and ")} measurement{missing.length > 1 ? "s" : ""}.
@@ -5114,18 +5127,39 @@ function AdaptiveBodyFatCard({ profile, entries, latestWeight, onProfileChange }
     );
   }
 
+  // All three numbers computed up front so the card can show a genuine
+  // side-by-side comparison, not just whichever one happens to be active.
   const blendedPct = 0.65 * stats.formulaBodyFatPct + 0.35 * stats.navyBodyFatPct;
-  const diff = blendedPct - stats.formulaBodyFatPct;
+  const options = [
+    { key: "formula", label: "My formula", pct: stats.formulaBodyFatPct, desc: "Weight, height, age, gender only" },
+    { key: "navy", label: "Navy method", pct: stats.navyBodyFatPct, desc: "Neck & waist circumference only" },
+    { key: "blend", label: "65 / 35 mix", pct: blendedPct, desc: "65% formula, 35% Navy" },
+  ];
+  const active = options.find(o => o.key === method) ?? options[0];
+
   return (
-    <div className={`ft-card ${isActive ? "ft-card-hero" : ""}`} style={cardStyle}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, flexWrap: "wrap", gap: 6 }}>
-        <div className="ft-label" style={{ marginBottom: 0 }}>Adaptive Body Fat %</div>
-        {isActive && <span style={{ fontSize: 10, fontWeight: 700, color: COLORS.mint, background: COLORS.mintDim, padding: "3px 8px", borderRadius: 999 }}>ACTIVE</span>}
+    <div className="ft-card ft-card-hero" style={cardStyle}>
+      <div className="ft-label" style={{ marginBottom: 4 }}>Body Fat % Method</div>
+      <div className="ft-mono ft-grad-text" style={{ fontSize: 26, fontWeight: 700 }}>{fmt(active.pct, 1)}%</div>
+      <div style={{ fontSize: 11.5, color: COLORS.creamDim, marginTop: 2 }}>Currently using: {active.label}</div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${COLORS.border}` }}>
+        {options.map(o => (
+          <button
+            key={o.key}
+            onClick={() => onProfileChange({ bodyFatMethod: o.key })}
+            className={`ft-btn ${o.key === method ? "ft-btn-primary" : "ft-btn-ghost"}`}
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", textAlign: "left", padding: "8px 12px" }}
+          >
+            <span>
+              <span style={{ fontWeight: 600 }}>{o.label}</span>
+              <span style={{ display: "block", fontSize: 10, opacity: 0.8, fontWeight: 400 }}>{o.desc}</span>
+            </span>
+            <span className="ft-mono" style={{ fontWeight: 700 }}>{fmt(o.pct, 1)}%</span>
+          </button>
+        ))}
       </div>
-      <div className="ft-mono ft-grad-text" style={{ fontSize: 26, fontWeight: 700 }}>{fmt(blendedPct, 1)}%</div>
-      <div style={{ fontSize: 11.5, color: COLORS.creamDim, marginTop: 2 }}>
-        vs {fmt(stats.formulaBodyFatPct, 1)}% from the formula — {diff >= 0 ? "+" : ""}{fmt(diff, 1)}%
-      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${COLORS.border}` }}>
         <div>
           <div style={{ fontSize: 9.5, color: COLORS.creamDim, textTransform: "uppercase" }}>Neck</div>
@@ -5137,18 +5171,7 @@ function AdaptiveBodyFatCard({ profile, entries, latestWeight, onProfileChange }
         </div>
       </div>
       <div style={{ fontSize: 10, color: COLORS.creamDim, marginTop: 10 }}>
-        Blend weighted 65% formula / 35% Navy method — updates automatically as you log new measurements. Unlike Adaptive TDEE, this doesn't freeze at a snapshot.
-      </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        {!isActive ? (
-          <button className="ft-btn ft-btn-primary" style={{ flex: 1 }} onClick={() => onProfileChange({ useAdaptiveBodyFat: true })}>
-            Use this on my Dashboard
-          </button>
-        ) : (
-          <button className="ft-btn ft-btn-ghost" style={{ flex: 1 }} onClick={() => onProfileChange({ useAdaptiveBodyFat: false })}>
-            Revert to formula
-          </button>
-        )}
+        Whichever method is selected updates automatically as you log new measurements — unlike Adaptive TDEE, this doesn't freeze at a snapshot.
       </div>
     </div>
   );
