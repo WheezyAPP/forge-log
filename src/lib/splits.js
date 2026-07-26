@@ -27,17 +27,17 @@ export const EX = {
   },
   "Lats": {
     primary:   ["Pull-Ups"],
-    compound:  ["Lat Pulldowns","Barbell Rows","Yates Rows","Dumbbell Rows","Meadows Rows","Close-Grip Lat Pulldowns","Seated Cable Rows","Single-Arm Cable Rows","Wide-Grip Pull-Ups","Assisted Pull-Up","Half-Kneeling 1-Arm Lat Pulldown","Lat Pulldown","Lean-Back Lat Pulldown","Lean-Back Machine Pulldown","Machine Pulldown","Medium-Grip Pull-Up","Neutral-Grip Lat Pulldown","Neutral-Grip Pull-Up","Overhand Lat Pulldown","Pull-Up","Wide-Grip Band-Assisted Pull-Up","Wide-Grip Lat Pulldown","Dual-Handle Lat Pulldown (Mid-back + Lats)","Iso-Lateral High Row","Iso-Lateral Low Row"],
+    compound:  ["Lat Pulldowns","Barbell Rows","Yates Rows","Dumbbell Rows","Meadows Rows","Close-Grip Lat Pulldowns","Seated Cable Rows","Single-Arm Cable Rows","Wide-Grip Pull-Ups","Assisted Pull-Up","Half-Kneeling 1-Arm Lat Pulldown","Lean-Back Lat Pulldown","Lean-Back Machine Pulldown","Machine Pulldown","Medium-Grip Pull-Up","Neutral-Grip Lat Pulldown","Neutral-Grip Pull-Up","Overhand Lat Pulldown","Wide-Grip Band-Assisted Pull-Up","Wide-Grip Lat Pulldown","Dual-Handle Lat Pulldown (Mid-back + Lats)","Iso-Lateral High Row","Iso-Lateral Low Row"],
     isolation: ["Straight-Arm Lat Pulldowns","1-Arm Lat Pull-In","Cross-Body Lat Pull-Around","DB Lat Pullover","Machine Lat Pullover","Straight-Bar Lat Prayer"],
   },
   "Rhomboids & Upper Back": {
     primary:   ["T-Bar Rows"],
-    compound:  ["Pendlay Rows","Rack Pulls","Chest-Supported Dumbbell Rows","Chest-Supported Machine Rows","Inverted Rows","Barbell Rows","Seal Rows","Renegade Rows","Arm-Out Single-Arm DB Row","Chest-Supported Machine Row","Chest-Supported T-Bar Row","Chest-Supported T-Bar Row + Kelso Shrug","Elbows-In 1-Arm DB Row","Helms Row","Incline Chest-Supported DB Row + Kelso Shrug","Lat-Focused Cable Row","Machine Chest-Supported Row + Kelso Shrug","Overhand Machine Row","Super-ROM Overhand Cable Row"],
+    compound:  ["Pendlay Rows","Rack Pulls","Chest-Supported Dumbbell Rows","Chest-Supported Machine Rows","Inverted Rows","Barbell Rows","Seal Rows","Renegade Rows","Arm-Out Single-Arm DB Row","Chest-Supported T-Bar Row","Chest-Supported T-Bar Row + Kelso Shrug","Elbows-In 1-Arm DB Row","Helms Row","Incline Chest-Supported DB Row + Kelso Shrug","Lat-Focused Cable Row","Machine Chest-Supported Row + Kelso Shrug","Overhand Machine Row","Super-ROM Overhand Cable Row"],
     isolation: ["Cable Face Pulls (Rope)","Cable Paused Shrug-In","Machine Shrug","Rope Face Pull","Lying Paused Rope Face Pull"],
   },
   "Shoulders": {
     primary:   ["Barbell Overhead Press"],
-    compound:  ["Dumbbell Shoulder Press","Arnold Press","Seated Dumbbell Press","Push Press","Dumbbell Upright Rows","Cable Upright Rows","Cable Shoulder Press","Machine Shoulder Press","Seated Barbell Shoulder Press","Seated DB Shoulder Press","Standing DB Arnold Press","Upright Row","Cable Upright Row","Viking Press","Smith Machine Overhead Press"],
+    compound:  ["Dumbbell Shoulder Press","Arnold Press","Seated Dumbbell Press","Push Press","Dumbbell Upright Rows","Cable Upright Rows","Cable Shoulder Press","Machine Shoulder Press","Seated Barbell Shoulder Press","Seated DB Shoulder Press","Standing DB Arnold Press","Upright Row","Viking Press","Smith Machine Overhead Press"],
     isolation: ["Lateral Raises","Front Raises","Cable Lateral Raises","Face Pulls","Reverse Pec Deck","Dumbbell Rear Delt Flyes","Cable Y-Raises","Bus Drivers","Cross-Body Cable Y-Raise","Cuffed Behind-The-Back Lateral Raise","DB Lateral Raise","DB Rear Delt Swing","DB Shrug","Machine Lateral Raise","Rear Delt 45° Cable Flye","Reverse Cable Flye","Reverse Cable Flye (w/ Integrated Partials)","Reverse Pec Deck (w/ Integrated Partials)","Super-ROM DB Lateral Raise","Bent-Over Reverse DB Flye","Bent-Over Reverse DB Flye (w/ Integrated Partials)","Cable Reverse Flye (Mechanical Dropset)"],
   },
   "Biceps": {
@@ -46,17 +46,17 @@ export const EX = {
     // correctly excluded from this pool. Isolation variety is the point here.
     primary:   ["Barbell Bicep Curls"],
     compound:  [],
-    isolation: ["Dumbbell Hammer Curls","Incline Dumbbell Curls","Preacher Curls","Concentration Curls","Cable Bayesian Curls","EZ Bar Curls","Spider Curls","Reverse Curls","Cross Body Hammer Curls","Zottman Curls","21s Bicep Curls","Bayesian Cable Curl","Bottom-2/3 Constant Tension Preacher Curl","Bottom-2/3 EZ-Bar Curl","Concentration Cable Curl","DB Concentration Curl","DB Incline Curl","DB Preacher Curl","DB Scott Curl","Fat-Grip DB Curl","Fat-Grip Preacher Curl","Hammer Preacher Curl","Incline DB Stretch-Curl","Inverse DB Zottman Curl","Kneeling Overhead Cable Curl","N1-Style Short-Head Curl","Overhead Cable Curl","Reverse-Grip Cable Curl","Reverse-Grip DB Curl","Reverse-Grip EZ-Bar Curl","Slow-Eccentric Bayesian Curl","Slow-Eccentric DB Curl","Slow-Eccentric DB Incline Curl","Slow-Eccentric DB Scott Curl","Spider Curl","Hammer Curl","Machine Preacher Curl"],
+    isolation: ["Dumbbell Hammer Curls","Incline Dumbbell Curls","Preacher Curls","Concentration Curls","Cable Bayesian Curls","EZ Bar Curls","Spider Curls","Reverse Curls","Cross Body Hammer Curls","Zottman Curls","21s Bicep Curls","Bayesian Cable Curl","Bottom-2/3 Constant Tension Preacher Curl","Bottom-2/3 EZ-Bar Curl","Concentration Cable Curl","DB Concentration Curl","DB Incline Curl","DB Preacher Curl","DB Scott Curl","Fat-Grip DB Curl","Fat-Grip Preacher Curl","Hammer Preacher Curl","Incline DB Stretch-Curl","Inverse DB Zottman Curl","Kneeling Overhead Cable Curl","N1-Style Short-Head Curl","Overhead Cable Curl","Reverse-Grip Cable Curl","Reverse-Grip DB Curl","Reverse-Grip EZ-Bar Curl","Slow-Eccentric Bayesian Curl","Slow-Eccentric DB Curl","Slow-Eccentric DB Incline Curl","Slow-Eccentric DB Scott Curl","Hammer Curl","Machine Preacher Curl"],
   },
   "Triceps": {
     primary:   ["Tricep Cable Pushdowns"],
-    compound:  ["Close-Grip Bench Press","Diamond Push-Ups","Bench Dips","JM Press","Barbell JM Press","Bench Dip","Bodyweight Dip","Close-Grip Assisted Dip","Paused Assisted Dip","Smith Machine JM Press","Seated Dip Machine"],
+    compound:  ["Close-Grip Bench Press","Diamond Push-Ups","Bench Dips","JM Press","Barbell JM Press","Bodyweight Dip","Close-Grip Assisted Dip","Paused Assisted Dip","Smith Machine JM Press","Seated Dip Machine"],
     isolation: ["Skull Crushers","Overhead Tricep Extensions","Single-Arm Cable Tricep Kickbacks","Rope Overhead Tricep Extensions","Tate Press","Cable Skull Crusher","Cable Triceps Kickback","DB French Press","DB Skull Crusher","DB Triceps Kickback","Dual-Cable Triceps Press","EZ-Bar Skull Crusher","Floor Skull Crusher","Katana Triceps Extension","Overhead Cable Triceps Extension (Bar)","Overhead Cable Triceps Extension (Rope)","Seated DB French Press","Single-arm Overhead Cable Triceps Extension","Slow-Eccentric DB French Press","Slow-Eccentric DB Skull Crusher","Slow-Eccentric EZ-Bar Skull Crusher","Triceps Diverging Pressdown (Long Rope or 2 Ropes)","Triceps Pressdown (Bar)","Triceps Pressdown (Rope)","Machine Overhead Tricep Extension"],
   },
   "Quads": {
     primary:   ["Barbell Back Squats"],
-    compound:  ["Leg Press","Hack Squats","Bulgarian Split Squats","Goblet Squats","Walking Lunges","Smith Machine Squats","Barbell Front Squats","Box Squats","Cyclist Squats","Pause Squats","Single-Leg Press","Belt Squats","Barbell Lunge","Belt Squat","DB Bulgarian Split Squat","DB Reverse Lunge","DB Step-Up","DB Walking Lunge","Front Squat","Goblet Squat","Hack Squat","High-Bar Back Squat","Machine Squat","Smith Machine Lunge","Smith Machine Reverse Lunge","Smith Machine Squat","Pendulum Squat","Vertical Leg Press"],
-    isolation: ["Leg Extensions","Leg Extension","Sissy Squat"],
+    compound:  ["Leg Press","Hack Squats","Bulgarian Split Squats","Goblet Squats","Walking Lunges","Smith Machine Squats","Barbell Front Squats","Box Squats","Cyclist Squats","Pause Squats","Single-Leg Press","Belt Squats","Barbell Lunge","DB Bulgarian Split Squat","DB Reverse Lunge","DB Step-Up","DB Walking Lunge","Front Squat","High-Bar Back Squat","Machine Squat","Smith Machine Lunge","Smith Machine Reverse Lunge","Pendulum Squat","Vertical Leg Press"],
+    isolation: ["Leg Extensions","Sissy Squat"],
   },
   "Hamstrings/Glutes": {
     // The old pool could stack Romanian + Conventional + Trap Bar deadlifts
@@ -64,11 +64,11 @@ export const EX = {
     // one hip-hinge compound leads, with isolation work covering the rest.
     primary:   ["Romanian Deadlifts"],
     compound:  ["Conventional Deadlifts","Trap Bar Deadlifts","Barbell Hip Thrusts","Barbell Glute Bridges","Jefferson Curls","DB RDL","Glute-Ham Raise","Good Morning (Light Weight)","Nordic Ham Curl","Paused Barbell RDL","Paused DB RDL","Reverse Nordic","Slow-Eccentric Barbell RDL","Slow-Eccentric DB RDL","Slow-Eccentric Glute-Ham Raise","Snatch-Grip RDL","Back Extensions","Glute Drive Machine","Smith Machine Hip Thrust"],
-    isolation: ["Lying Leg Curls","Seated Leg Curls","Cable Pull-Throughs","GHD Raises","Seated Calf Raises","Standing Calf Raises","Nordic Hamstring Curls","Arms-Extended 45° Hyperextension","Cable Hip Abduction","Cable Hip Adduction","Copenhagen Hip Adduction","DB Calf Jumps","Donkey Calf Raise","Lateral Band Walk","Leg Press Calf Jumps","Leg Press Calf Press","Lying Leg Curl","Machine Hip Abduction","Machine Hip Adduction","Prisoner 45° Hyperextension","Seated Calf Raise","Seated Leg Curl","Standing Calf Raise","Standing Single-Leg Curl","Reverse Hyperextension","Machine Glute Kickback","Cable Glute Kickback","Machine Back Extension"],
+    isolation: ["Lying Leg Curls","Seated Leg Curls","Cable Pull-Throughs","GHD Raises","Seated Calf Raises","Standing Calf Raises","Nordic Hamstring Curls","Arms-Extended 45° Hyperextension","Cable Hip Abduction","Cable Hip Adduction","Copenhagen Hip Adduction","DB Calf Jumps","Donkey Calf Raise","Lateral Band Walk","Leg Press Calf Jumps","Leg Press Calf Press","Machine Hip Abduction","Machine Hip Adduction","Prisoner 45° Hyperextension","Standing Single-Leg Curl","Reverse Hyperextension","Machine Glute Kickback","Cable Glute Kickback","Machine Back Extension"],
   },
   "Abs & Core": {
     primary:   ["Hanging Leg Raises"],
-    compound:  ["Ab Wheel Rollouts","Dragon Flys","Muscle-Ups","Pallof Press","Ab Wheel Rollout","Half-Kneeling Pallof Press","Hanging Leg Raise","Roman Chair Leg Raise","Swiss Ball Rollout"],
+    compound:  ["Ab Wheel Rollouts","Dragon Flys","Muscle-Ups","Pallof Press","Half-Kneeling Pallof Press","Roman Chair Leg Raise","Swiss Ball Rollout"],
     isolation: ["Weighted Ab Crunches","Cable Crunches","Russian Twists","Dead Bug","Bicycle Crunch","Cable Crunch","LLPT Plank","Machine Crunch","Medicine Ball Russian Twists","Plate-Loaded Neck Curls","Plate-Weighted Crunch","Reverse Crunch","Stomach Vacuums","Machine Torso Rotation"],
   },
   // ── Bodyweight / calisthenics groups ───────────────────────────────
