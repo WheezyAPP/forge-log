@@ -245,15 +245,20 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   // to tweak a day doesn't mean starting over) the moment it opens.
   const [planDrafts, setPlanDrafts] = useState(null);
   const [planSearch, setPlanSearch] = useState({});
+  // How many days the currently-open planner spans — 7 or 30. Threads
+  // through openPlanWeek/lockInWeek/applyTemplate/saveAsTemplate and the
+  // day-card render below instead of any of them hardcoding 7, so this
+  // one flag is what actually makes both lengths work off the same code.
+  const [planLength, setPlanLength] = useState(7);
   // Holds the dateKey of whichever day's card opened the full A-Z browse
   // modal (null when closed) — lets someone scan every exercise in the
   // database instead of only typing a search, same OFF_SPLIT_EXERCISES
   // list already used for search, just unfiltered and grouped by letter.
   const [browseOpen, setBrowseOpen] = useState(null);
 
-  function openPlanWeek() {
+  function openPlanWeek(days) {
     const drafts = {};
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < days; i++) {
       const dateKey = localDateStr(addDays(today, i));
       const existing = customDayPlans?.[dateKey];
       drafts[dateKey] = existing
@@ -262,6 +267,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     }
     setPlanDrafts(drafts);
     setPlanSearch({});
+    setPlanLength(days);
     setView("planWeek");
   }
   function updateDraft(dateKey, patch) {
@@ -283,7 +289,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     await onDeleteCustomDayPlan?.(dateKey);
   }
   async function lockInWeek() {
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < planLength; i++) {
       const dateKey = localDateStr(addDays(today, i));
       const draft = planDrafts[dateKey];
       const touched = draft.isRest || draft.dayType.trim() || draft.exercises.length > 0;
@@ -298,27 +304,29 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     setView("locked");
   }
 
-  // Templates store day-slots by RELATIVE position (Day 1..7), not real
-  // dates — applying one just maps those 7 slots onto whichever 7 real
+  // Templates store day-slots by RELATIVE position (Day 1..N), not real
+  // dates — applying one just maps those N slots onto whichever N real
   // dates the planner currently has open, so the same template can be
-  // reused on any future week without ever touching the dates it was
-  // originally built for.
+  // reused on any future week/month without ever touching the dates it
+  // was originally built for.
   const [templateNameInput, setTemplateNameInput] = useState("");
   const [templatePromptOpen, setTemplatePromptOpen] = useState(false);
 
   function applyTemplate(template) {
+    const days = template.days?.length || planLength;
     const drafts = {};
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < days; i++) {
       const dateKey = localDateStr(addDays(today, i));
       const slot = template.days[i] || { dayType: "", isRest: false, exercises: [] };
       drafts[dateKey] = { dayType: slot.dayType || "", isRest: !!slot.isRest, exercises: slot.exercises || [] };
     }
     setPlanDrafts(drafts);
+    setPlanLength(days); // adopt the template's own length rather than truncating/leaving days blank
   }
   function saveAsTemplate() {
     const name = templateNameInput.trim();
     if (!name) return;
-    const days = Array.from({ length: 7 }, (_, i) => {
+    const days = Array.from({ length: planLength }, (_, i) => {
       const dateKey = localDateStr(addDays(today, i));
       const draft = planDrafts[dateKey];
       return { dayType: draft.dayType, isRest: draft.isRest, exercises: draft.exercises };
@@ -829,7 +837,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
             </div>
           )}
           <button className="ft-btn ft-btn-ghost" onClick={() => setView("history")}><History size={13}/> History</button>
-          <button className="ft-btn ft-btn-ghost" onClick={openPlanWeek}><CalendarDays size={13}/> Plan next 7 days</button>
+          <button className="ft-btn ft-btn-ghost" onClick={() => setView("planChoice")}><CalendarDays size={13}/> Custom workout</button>
           <button className="ft-btn ft-btn-ghost" onClick={changeSplit}><RotateCcw size={13}/> Change split</button>
         </div>
       </div>
@@ -1312,10 +1320,28 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     );
   }
 
+  if (view === "planChoice") return (
+    <div>
+      <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("locked")}><ArrowLeft size={13}/> Back</button>
+      <div style={{ fontSize:20, fontWeight:800, marginBottom:4 }}>Custom workout</div>
+      <div style={{ fontSize:11.5, color:C.creamDim, marginBottom:16, lineHeight:1.5 }}>
+        Build out exactly what specific days should look like ahead of time, instead of following your regular split. How far out do you want to plan?
+      </div>
+      <button className="ft-card" style={{ padding:16, marginBottom:10, textAlign:"left", cursor:"pointer", display:"block", width:"100%" }} onClick={() => openPlanWeek(7)}>
+        <div style={{ fontWeight:700, fontSize:14, marginBottom:2 }}>7-day plan</div>
+        <div style={{ fontSize:11.5, color:C.creamDim }}>Map out the coming week, day by day.</div>
+      </button>
+      <button className="ft-card" style={{ padding:16, textAlign:"left", cursor:"pointer", display:"block", width:"100%" }} onClick={() => openPlanWeek(30)}>
+        <div style={{ fontWeight:700, fontSize:14, marginBottom:2 }}>30-day plan</div>
+        <div style={{ fontSize:11.5, color:C.creamDim }}>Map out a full month at once — good for a planned program change or a trip.</div>
+      </button>
+    </div>
+  );
+
   if (view === "planWeek" && planDrafts) return (
     <div>
       <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("locked")}><ArrowLeft size={13}/> Back</button>
-      <div style={{ fontSize:20, fontWeight:800, marginBottom:4 }}>Plan your next 7 days</div>
+      <div style={{ fontSize:20, fontWeight:800, marginBottom:4 }}>Plan your next {planLength} days</div>
       <div style={{ fontSize:11.5, color:C.creamDim, marginBottom:16, lineHeight:1.5 }}>
         Build out exactly what each day should look like ahead of time — your own exercises, your own day names, or mark it Rest. Once locked in, these dates override your regular split until they pass; walk into the gym and just log weight and reps.
       </div>
@@ -1327,7 +1353,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
             {customSplitTemplates.map(t => (
               <div key={t.id} style={{ display:"flex", alignItems:"center", gap:8 }}>
                 <button className="ft-btn ft-btn-ghost" style={{ flex:1, justifyContent:"flex-start" }} onClick={() => applyTemplate(t)}>
-                  <BookmarkPlus size={13}/> {t.name}
+                  <BookmarkPlus size={13}/> {t.name} <span style={{ color:C.creamDim, fontWeight:400 }}>({t.days?.length || 7}-day)</span>
                 </button>
                 <button onClick={() => onDeleteCustomSplitTemplate?.(t.id)} aria-label={`Delete ${t.name}`} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer", padding:4 }}><XIcon size={13}/></button>
               </div>
@@ -1337,7 +1363,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         </div>
       )}
 
-      {Array.from({ length:7 }, (_, i) => addDays(today, i)).map(date => {
+      {Array.from({ length:planLength }, (_, i) => addDays(today, i)).map(date => {
         const dateKey = localDateStr(date);
         const draft = planDrafts[dateKey];
         const search = planSearch[dateKey] || "";
@@ -1458,12 +1484,12 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
           </div>
         ) : (
           <button className="ft-btn ft-btn-ghost" style={{ width:"100%" }} onClick={() => setTemplatePromptOpen(true)}>
-            <BookmarkPlus size={13}/> Save this week as a reusable plan
+            <BookmarkPlus size={13}/> Save this plan as reusable
           </button>
         )}
       </div>
 
-      <button className="ft-btn ft-btn-primary" style={{ width:"100%" }} onClick={lockInWeek}><Check size={14}/> Lock in this week</button>
+      <button className="ft-btn ft-btn-primary" style={{ width:"100%" }} onClick={lockInWeek}><Check size={14}/> Lock in this plan</button>
     </div>
   );
 

@@ -1054,7 +1054,7 @@ const GlobalStyle = () => (
     .ft-nav-sub-item:active { transform: scale(0.93); }
 
     @media (max-width: 680px) {
-      .ft-app { padding: 10px !important; padding-bottom: 100px !important; }
+      .ft-app { padding: 10px !important; padding-bottom: var(--ft-nav-clearance, 100px) !important; }
       .ft-tab { font-size: 11px; padding: 8px 4px; min-height: var(--ft-touch); }
       .ft-tabs-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; display: flex; gap: 14px; scrollbar-width: none; white-space: nowrap; padding-bottom: 2px; }
       .ft-tabs-scroll::-webkit-scrollbar { display: none; }
@@ -1687,7 +1687,26 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   }
 
   return (
-    <div className="ft-app" style={{ padding: 20, paddingBottom: 100, borderRadius: 18 }}>
+    <div
+      className="ft-app"
+      style={{
+        padding: 20,
+        paddingBottom: "var(--ft-nav-clearance)",
+        borderRadius: 18,
+        // Reserves enough room at the bottom for the floating nav so the
+        // last bit of scrollable content never sits behind it. The old
+        // fixed 100px only ever covered the primary pill row — most tabs
+        // (anything with sub-tabs: Log, Check-Ins, Strength Training)
+        // also show a second row above it, which the fixed value never
+        // accounted for, so the nav ended up overlapping the last item
+        // or two of whatever list was open. Same condition the sub-nav
+        // row itself renders on below, so the two can't disagree. Used
+        // for both this base padding-bottom and the mobile media-query
+        // override in GlobalStyle, so there's one source of truth
+        // instead of the two ever drifting apart again.
+        "--ft-nav-clearance": activeGroup.children ? "148px" : "100px",
+      }}
+    >
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -2482,7 +2501,7 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
         <Stat icon={<Flame size={16} color={COLORS.ember} />} label="Maintenance (TDEE)" value={`${fmt(stats.tdee)} cal`} swayDelay={-0.0} />
         <Stat
           icon={<Gauge size={16} color={COLORS.ember} />}
-          label="Suggested calories"
+          label="Suggested calories (goal)"
           value={`${fmt(stats.suggestedCalories)} cal`}
           sub={stats.dailyCalorieAdjustment !== 0 ? `${stats.dailyCalorieAdjustment > 0 ? "+" : ""}${fmt(stats.dailyCalorieAdjustment)} cal/day goal` : "goal: maintain"}
           emphasized
@@ -2514,7 +2533,7 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
         {isBodyFatVisible(profile) && (
           <Stat
             icon={<TrendingDown size={16} color={COLORS.amber} />}
-            label="Estimated body fat %"
+            label="Est. body fat %"
             value={`${fmt(stats.bodyFatPct, 1)}%`}
             sub={
               stats.navyEligible && profile.bodyFatMethod === "navy" ? "Navy circumference method"
@@ -2526,7 +2545,7 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
             swayDelay={-1.2}
           />
         )}
-        <Stat icon={<Droplet size={16} color={COLORS.ember} />} label="Estimated fat mass" value={`${fmt(stats.fatLbs, 1)} lbs`} sub={`lean: ${fmt(stats.leanLbs, 1)} lbs`} swayDelay={-1.8} />
+        <Stat icon={<Droplet size={16} color={COLORS.ember} />} label="Est. fat mass" value={`${fmt(stats.fatLbs, 1)} lbs`} sub={`lean: ${fmt(stats.leanLbs, 1)} lbs`} swayDelay={-1.8} />
         <Stat icon={<TrendingDown size={16} color={COLORS.mint} />} label="Deficit target (fixed)" value={`${fmt(stats.deficitTarget)} cal`} swayDelay={-2.4} />
         <Stat icon={<TrendingUp size={16} color={COLORS.amber} />} label="Surplus target (fixed)" value={`${fmt(stats.surplusTarget)} cal`} swayDelay={-3.0} />
 
@@ -2917,7 +2936,7 @@ function LogEntry(props) {
       </div>
 
       {historyOpen && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={e => { if (e.target === e.currentTarget) setHistoryOpen(false); }}>
           <div className="ft-card" style={{ padding: 20, maxWidth: 480, width: "100%", maxHeight: "80vh", overflowY: "auto", overscrollBehavior: "contain" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
@@ -3484,7 +3503,7 @@ function FoodLogTab({ userId, selectedDate, setSelectedDate, meals, addMeal, upd
       </div>
 
       {historyOpen && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={e => { if (e.target === e.currentTarget) setHistoryOpen(false); }}>
           <div className="ft-card" style={{ padding: 20, maxWidth: 480, width: "100%", maxHeight: "80vh", overflowY: "auto", overscrollBehavior: "contain" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
@@ -3707,7 +3726,7 @@ function WeighInTab({ entries, weighInsForDate, onAdd, onDelete }) {
       </div>
 
       {historyOpen && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={e => { if (e.target === e.currentTarget) setHistoryOpen(false); }}>
           <div className="ft-card" style={{ padding: 20, maxWidth: 480, width: "100%", maxHeight: "80vh", overflowY: "auto", overscrollBehavior: "contain" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
@@ -3990,7 +4009,7 @@ function WaterLogTab({ entries, waterLogsForDate, onAdd, onDelete, profile, late
       </div>
 
       {historyOpen && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={e => { if (e.target === e.currentTarget) setHistoryOpen(false); }}>
           <div className="ft-card" style={{ padding: 20, maxWidth: 480, width: "100%", maxHeight: "80vh", overflowY: "auto", overscrollBehavior: "contain" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
