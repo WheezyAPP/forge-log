@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Dumbbell, ChevronDown, ChevronUp, CalendarDays, Target, Check, RotateCcw,
   Repeat, ExternalLink, X as XIcon, ChevronRight, ChevronLeft, ArrowLeft, History, Trophy,
@@ -11,7 +11,7 @@ import {
 } from "../lib/splits";
 import {
   setUserSplitId, getUserWeakPointGroups, setUserWeakPointGroups,
-  insertWorkoutSessions, deleteWorkoutSession,
+  insertWorkoutSessions, deleteWorkoutSessionsForDate,
 } from "../lib/storage";
 import { EXERCISE_LINKS } from "../overload/exerciseLinks";
 import { toastError } from "../lib/toast";
@@ -142,6 +142,47 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   const [weakPointKeys, setWeakPointKeys] = useState([]);
   const [dayOffset, setDayOffset] = useState(0);
   const [blocks, setBlocks] = useState([]);
+  // Drag-to-reorder for the exercise cards below — which index (if any)
+  // is currently being dragged, and a ref per card so the drag handler
+  // can measure where each card actually sits on screen right now (cards
+  // reflow live as you drag past one, so their positions keep changing
+  // mid-drag — this can't be precomputed once). Deliberately built on
+  // Pointer Events + setPointerCapture rather than the HTML5 drag-and-
+  // drop API, which is mouse-oriented and unreliable on touch; pointer
+  // capture keeps the drag tracking correctly even once a finger moves
+  // over a DIFFERENT card's DOM element mid-drag, without needing a
+  // drag-and-drop library.
+  const [dragIndex, setDragIndex] = useState(null);
+  const blockCardRefs = useRef([]);
+  function handleDragPointerDown(e, index) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDragIndex(index);
+  }
+  function handleDragPointerMove(e) {
+    if (dragIndex == null) return;
+    blockCardRefs.current.length = blocks.length; // drop any stale entries from a previous, longer render
+    const y = e.clientY;
+    let targetIndex = dragIndex;
+    for (let i = 0; i < blockCardRefs.current.length; i++) {
+      const el = blockCardRefs.current[i];
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (y >= rect.top && y <= rect.bottom) { targetIndex = i; break; }
+    }
+    if (targetIndex !== dragIndex) {
+      setBlocks(prev => {
+        const next = [...prev];
+        const [moved] = next.splice(dragIndex, 1);
+        next.splice(targetIndex, 0, moved);
+        return next;
+      });
+      setDragIndex(targetIndex);
+      setDirty(true); // reordering is an unsaved change, same as everything else on this screen
+    }
+  }
+  function handleDragPointerUp() {
+    setDragIndex(null);
+  }
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   // True whenever `blocks` holds a typed weight/rep, an added/removed/
@@ -623,12 +664,20 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     // coverage and history ("worked it on the 14th, logged for the 17th").
     const todayKey = localDateStr(new Date());
     const dateKey = day.dateKey > todayKey ? todayKey : day.dateKey;
-    // Only replace sessions logged under the CURRENTLY selected split for
+    // Only replaces sessions logged under the CURRENTLY selected split for
     // this date — sessions from a different split (or logged before
     // split-tagging existed) are left alone rather than wiped out just
     // because you happened to reopen this date under a new split.
-    const existing = workoutSessions.filter(s => s.date === dateKey && s.splitId === userSplitId);
-    for (const s of existing) await deleteWorkoutSession(userId, s.id);
+    //
+    // Deletes whatever ACTUALLY exists in the database for this date and
+    // split, not just whatever the client's local workoutSessions state
+    // currently happens to know about — looping over locally-known IDs
+    // here is exactly what let re-saving an already-logged day silently
+    // duplicate it (confirmed on real data: Shelby re-saved a day ~30
+    // minutes after the first save, and the two exercises that hadn't
+    // changed got duplicated while the two she'd added were fine — the
+    // delete step simply didn't know the first save's rows existed yet).
+    await deleteWorkoutSessionsForDate(userId, dateKey, userSplitId);
 
     const toInsert = blocks
       .filter(b => b.exercise && b.sets.some(s => parseFloat(s.w) > 0 && parseInt(s.r) > 0))
@@ -680,7 +729,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     const oldDateKey = day.dateKey;
     if (fixDateValue === oldDateKey) { setFixingDate(false); return; }
     const toMove = workoutSessions.filter(s => s.date === oldDateKey && s.splitId === userSplitId);
-    for (const s of toMove) await deleteWorkoutSession(userId, s.id);
+    await deleteWorkoutSessionsForDate(userId, oldDateKey, userSplitId);
     const reinserted = toMove.length
       ? await insertWorkoutSessions(userId, toMove.map(s => ({ date: fixDateValue, exercise: s.exercise, group: s.group, sets: s.sets, splitId: s.splitId })))
       : [];
@@ -1055,7 +1104,15 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
 
           if (b.locked) {
             return (
-              <div key={bi} className="ft-card-raised" style={{ padding:12, marginBottom:8, opacity:0.75 }}>
+              <div key={bi} ref={el => blockCardRefs.current[bi] = el} className="ft-card-raised" style={{ padding:12, marginBottom:8, opacity: dragIndex === bi ? 0.5 : 0.75 }}>
+                <div
+                  onPointerDown={(e) => handleDragPointerDown(e, bi)}
+                  onPointerMove={handleDragPointerMove}
+                  onPointerUp={handleDragPointerUp}
+                  onPointerCancel={handleDragPointerUp}
+                  style={{ width:40, height:5, borderRadius:3, background: dragIndex === bi ? C.ember : C.border, margin:"-2px auto 10px", cursor:"grab", touchAction:"none" }}
+                  title="Drag to reorder"
+                />
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
                   <div style={{ fontSize:13, fontWeight:700, display:"flex", alignItems:"center", gap:6 }}>
                     <Lock size={11} color={C.creamDim} />
@@ -1077,7 +1134,15 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
           }
 
           return (
-            <div key={bi} className="ft-card-raised" style={{ padding:12, marginBottom:8, border: isDeload ? `1px solid ${C.warn}` : undefined }}>
+            <div key={bi} ref={el => blockCardRefs.current[bi] = el} className="ft-card-raised" style={{ padding:12, marginBottom:8, border: isDeload ? `1px solid ${C.warn}` : undefined, opacity: dragIndex === bi ? 0.5 : 1 }}>
+              <div
+                onPointerDown={(e) => handleDragPointerDown(e, bi)}
+                onPointerMove={handleDragPointerMove}
+                onPointerUp={handleDragPointerUp}
+                onPointerCancel={handleDragPointerUp}
+                style={{ width:40, height:5, borderRadius:3, background: dragIndex === bi ? C.ember : C.border, margin:"-2px auto 10px", cursor:"grab", touchAction:"none" }}
+                title="Drag to reorder"
+              />
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
                 <div style={{ fontSize:13, fontWeight:700 }}>
                   {b.exercise || "Select exercise"}

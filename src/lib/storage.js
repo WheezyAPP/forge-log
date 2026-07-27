@@ -495,6 +495,36 @@ export async function deleteWorkoutSession(userId, id) {
   }
 }
 
+// Deletes every session for a given user+date+split in one server-side
+// query, instead of looping over whatever IDs the client's local
+// workoutSessions state currently happens to know about. That loop-over-
+// known-IDs pattern is exactly what let re-saving an already-logged day
+// silently duplicate it: if the local state hadn't yet caught up with
+// what was actually already in the database (stale prop, a reload
+// mid-session, anything), the "existing rows to delete" list would miss
+// real rows, and the fresh insert right after would land on top of them
+// instead of replacing them. A single filtered delete is correct
+// regardless of what the client's local state currently believes.
+export async function deleteWorkoutSessionsForDate(userId, date, splitId) {
+  if (!userId) return;
+
+  const cached = readCache("sessions", userId, []);
+  writeCache("sessions", userId, cached.filter((s) => !(s.date === date && s.splitId === splitId)));
+
+  if (!isOnline()) {
+    enqueueOp("deleteWorkoutSessionsForDate", [userId, date, splitId]);
+    return;
+  }
+  try {
+    const { error } = await supabase.from("workout_sessions").delete().eq("user_id", userId).eq("date", date).eq("split_id", splitId);
+    if (error) throw error;
+  } catch (e) {
+    console.error("deleteWorkoutSessionsForDate failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("deleteWorkoutSessionsForDate", [userId, date, splitId]);
+  }
+}
+
 function maxAttemptFromRow(row) {
   return {
     id: row.id,
@@ -1171,6 +1201,10 @@ export const offlineExecutors = {
   },
   deleteWorkoutSession: async (userId, id) => {
     const { error } = await supabase.from("workout_sessions").delete().eq("user_id", userId).eq("id", id);
+    if (error) throw error;
+  },
+  deleteWorkoutSessionsForDate: async (userId, date, splitId) => {
+    const { error } = await supabase.from("workout_sessions").delete().eq("user_id", userId).eq("date", date).eq("split_id", splitId);
     if (error) throw error;
   },
   insertMaxAttemptRaw: async (row) => {

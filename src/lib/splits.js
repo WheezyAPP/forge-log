@@ -104,6 +104,28 @@ export const ANATOMICAL_GROUPS = [
   "Biceps", "Triceps", "Quads", "Hamstrings/Glutes", "Abs & Core",
 ];
 
+// A handful of exercises meaningfully train TWO muscle groups at full
+// working-set intensity — not the fractional "synergist" credit
+// INDIRECT_CREDIT models below. Seated Cable Rows is the clearest case:
+// it drives both lats (adduction) and rhomboids/mid-traps (scapular
+// retraction) hard enough that crediting only whichever single group it
+// happened to be logged under would understate real training effect on
+// the other — unlike Biceps' involvement in a row, which genuinely is
+// just synergist-level and belongs in INDIRECT_CREDIT instead. Keyed by
+// exercise name; each value is the FULL set of groups a set of this
+// exercise counts toward directly, including whichever one it's
+// actually tagged with — spelled out explicitly here rather than
+// assumed, so this table reads correctly on its own.
+export const DUAL_DIRECT_CREDIT = {
+  "Seated Cable Rows": ["Lats", "Rhomboids & Upper Back"],
+};
+
+// Which groups a logged session counts toward directly — DUAL_DIRECT_CREDIT's
+// full list when the exercise has one, otherwise just its own tagged group.
+function directGroupsFor(session) {
+  return DUAL_DIRECT_CREDIT[session.exercise] || [session.group];
+}
+
 // Rolling 7-day set volume per muscle group — a different lens than the
 // attendance grades, which measure whether you showed up. This measures
 // whether each muscle group is actually getting enough direct work,
@@ -117,7 +139,7 @@ export function computeSetCoverage(workoutSessions, groups, asOfDate = null) {
   const todayStr2 = localDateStr(today);
   const inWindow = (workoutSessions || []).filter(s => s.date >= cutoffStr && s.date <= todayStr2);
   return groups.map(group => {
-    const sets = inWindow.filter(s => s.group === group).reduce((sum, s) => sum + (s.sets?.length || 0), 0);
+    const sets = inWindow.filter(s => directGroupsFor(s).includes(group)).reduce((sum, s) => sum + (s.sets?.length || 0), 0);
     return { group, sets };
   });
 }
@@ -167,7 +189,7 @@ export function computeSetCoverageDetailed(workoutSessions, groups, asOfDate = n
   const inWindow = (workoutSessions || []).filter(s => s.date >= cutoffStr && s.date <= todayStr2);
 
   return groups.map(group => {
-    const direct = inWindow.filter(s => s.group === group).reduce((sum, s) => sum + (s.sets?.length || 0), 0);
+    const direct = inWindow.filter(s => directGroupsFor(s).includes(group)).reduce((sum, s) => sum + (s.sets?.length || 0), 0);
 
     const indirectSources = [];
     let indirectRaw = 0;
@@ -791,8 +813,16 @@ function relativeDay(dateStr) {
 // longer-established lifts call for smaller, more sustainable jumps —
 // matching how every real progression guide treats a beginner
 // differently from an advanced lifter on the same movement.
+//
+// Session-count windows below were originally 8 and 20 — at a typical
+// 2-3x/week frequency per lift, session 8 lands just 3-4 weeks in, far
+// earlier than real novice linear-progression programs (StrongLifts,
+// Starting Strength, GreySkull) actually run the aggressive phase for —
+// those commonly go 8-16+ weeks before a beginner needs to slow down.
+// Doubled both windows so the 5% phase doesn't taper off while someone's
+// still squarely in real newbie-gains territory.
 function practicalIncrement(exerciseName, group, weight, sessionCount) {
-  const pct = sessionCount < 8 ? 0.05 : sessionCount <= 20 ? 0.035 : 0.025;
+  const pct = sessionCount < 16 ? 0.05 : sessionCount <= 40 ? 0.035 : 0.025;
   const raw = weight * pct;
 
   // Equipment type inferred from the exercise name itself (it's already
