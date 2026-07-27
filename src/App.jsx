@@ -409,6 +409,7 @@ function computeAdaptiveTDEE(entries, goalType, lookbackDays = ADAPTIVE_TDEE_LOO
   // doesn't).
   let trendStable = true;
   let secondHalfRateLbsPerWeek = null;
+  let secondHalfAvgCalories = null;
   const halfIdx = Math.ceil(windowDates.length / 2);
   const firstHalfDates = windowDates.slice(0, halfIdx);
   const secondHalfDates = windowDates.slice(halfIdx);
@@ -416,6 +417,7 @@ function computeAdaptiveTDEE(entries, goalType, lookbackDays = ADAPTIVE_TDEE_LOO
     const firstRateWk = uniformSlope(firstHalfDates.map(d => [d, smoothedWeightByDate[d]])) * 7;
     const secondRateWk = uniformSlope(secondHalfDates.map(d => [d, smoothedWeightByDate[d]])) * 7;
     secondHalfRateLbsPerWeek = secondRateWk;
+    secondHalfAvgCalories = secondHalfDates.reduce((s, d) => s + entries[d].caloriesConsumed, 0) / secondHalfDates.length;
     const signFlipped = Math.sign(firstRateWk) !== Math.sign(secondRateWk) && Math.abs(firstRateWk) > 0.15;
     // "Meaningfully bigger": at least 30% larger in magnitude AND at
     // least half a pound/week of actual difference — the absolute floor
@@ -435,7 +437,111 @@ function computeAdaptiveTDEE(entries, goalType, lookbackDays = ADAPTIVE_TDEE_LOO
     confidence,
     trendStable,
     secondHalfRateLbsPerWeek,
+    secondHalfAvgCalories,
     energyDensity,
+    asOfDate,
+  };
+}
+
+// Goal-weight ETA — deliberately a richer statistical model, not a
+// literal machine-learning one (no ML infra exists in this client-side
+// app to train or run one on). "Smarter" here means combining more of
+// the REAL signals computeAdaptiveTDEE already exposes, instead of
+// projecting a single point estimate off one number:
+//   - a RANGE (earliest/likely/latest), not one date — bounded by the
+//     full-window rate vs. the recent-half rate, so the honest spread
+//     between "how it's trended overall" and "how it's trended lately"
+//     is visible instead of hidden behind a single confident-looking
+//     number
+//   - recent logging completeness — a date projected off a trend with
+//     gaps in the last few days deserves less confidence than one built
+//     on unbroken daily logs, so this checks for that directly rather
+//     than assuming every "ready" trend is equally trustworthy
+//   - a calorie-shift leading indicator — weight lags real intake
+//     changes by 1-2 weeks (water/glycogen catching up), so a recent
+//     shift in what's actually being eaten is visible in the calorie
+//     numbers before it ever shows up in the weight trend itself
+// Verified end-to-end against Dion's real logged data (see chat).
+function estimateGoalDate(entries, profile, goalWeightLbs, latestWeight, asOfDateStr = todayStr()) {
+  const diff = goalWeightLbs - latestWeight;
+  const absDiff = Math.abs(diff);
+  if (absDiff < 0.5) return { reached: true };
+
+  const neededSign = Math.sign(diff); // +1 = needs to gain, -1 = needs to lose
+  const adaptive = computeAdaptiveTDEE(entries, profile.goalType);
+  const rate = profile.goalRateLbsPerWeek || 0;
+  // Configured rate is a magnitude, not signed, and for mini_cut it isn't
+  // even what drives calories (a fixed 25%-of-TDEE deficit is) — only a
+  // meaningful fallback for lose/gain, and only an assumption, not
+  // evidence, so it never gets a range, just a single projected date.
+  const fallbackRateWk = (rate > 0 && (profile.goalType === "lose" || profile.goalType === "gain")) ? neededSign * rate : null;
+
+  const addDaysToDateStr = (dateStr, days) => {
+    const d = new Date(dateStr + "T00:00:00");
+    d.setDate(d.getDate() + Math.max(0, Math.round(days)));
+    return localDateStr(d);
+  };
+
+  if (!adaptive.ready) {
+    if (fallbackRateWk == null) return { reached: false, usingReal: false, onTrack: false };
+    const days = absDiff / (Math.abs(fallbackRateWk) / 7);
+    return { reached: false, usingReal: false, onTrack: true, effectiveRateWk: fallbackRateWk, likelyDate: addDaysToDateStr(asOfDateStr, days) };
+  }
+
+  const mainRateWk = adaptive.weightChangeLbsPerWeek;
+  const onTrack = Math.sign(mainRateWk) === neededSign && Math.abs(mainRateWk) > 0.05;
+  if (!onTrack) return { reached: false, usingReal: true, onTrack: false, effectiveRateWk: mainRateWk };
+
+  const daysLikely = absDiff / (Math.abs(mainRateWk) / 7);
+  const likelyDate = addDaysToDateStr(asOfDateStr, daysLikely);
+
+  // Range: only widen it using the recent-half rate when that rate is
+  // itself a real, same-direction signal — a recent-half rate pointing
+  // the wrong way or too small to trust just means "no additional
+  // information," not "the range is infinite," so it's left out rather
+  // than distorting the bounds.
+  let earliestDate = likelyDate, latestDate = likelyDate;
+  if (adaptive.secondHalfRateLbsPerWeek != null && Math.sign(adaptive.secondHalfRateLbsPerWeek) === neededSign) {
+    const recentRateWk = Math.abs(adaptive.secondHalfRateLbsPerWeek);
+    const mainRateAbs = Math.abs(mainRateWk);
+    const fasterWk = Math.max(recentRateWk, mainRateAbs);
+    const slowerWk = Math.min(recentRateWk, mainRateAbs);
+    earliestDate = addDaysToDateStr(asOfDateStr, absDiff / (fasterWk / 7));
+    latestDate = addDaysToDateStr(asOfDateStr, absDiff / (slowerWk / 7));
+  }
+
+  // Last 5 calendar days ending at the trend's own asOfDate (not
+  // necessarily today, if nothing's been logged yet today) — how many
+  // have BOTH a weight and a calorie figure logged. A trend built on
+  // broken recent logging deserves a flagged caveat even if it's
+  // mathematically "ready."
+  const last5 = Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(adaptive.asOfDate ? adaptive.asOfDate + "T00:00:00" : asOfDateStr + "T00:00:00");
+    d.setDate(d.getDate() - i);
+    return localDateStr(d);
+  });
+  const recentLoggedCount = last5.filter(d => entries[d]?.weight != null && entries[d]?.caloriesConsumed != null).length;
+  const recentLoggingGaps = recentLoggedCount < 4; // missed more than 1 of the last 5 days
+
+  // Calorie-shift leading indicator — compares the recent-half average
+  // against the full-window average already computed above.
+  let calorieShiftNote = null;
+  if (adaptive.secondHalfAvgCalories != null) {
+    const shift = adaptive.secondHalfAvgCalories - adaptive.avgCalories;
+    if (Math.abs(shift) > 150) {
+      calorieShiftNote = shift > 0
+        ? `eating ${fmt(Math.abs(shift))} cal/day more lately than the window average — this rate may not hold`
+        : `eating ${fmt(Math.abs(shift))} cal/day less lately than the window average — this could speed up`;
+    }
+  }
+
+  return {
+    reached: false, usingReal: true, onTrack: true,
+    effectiveRateWk: mainRateWk,
+    likelyDate, earliestDate, latestDate,
+    trendStable: adaptive.trendStable,
+    recentLoggingGaps, recentLoggedCount,
+    calorieShiftNote,
   };
 }
 
@@ -5562,24 +5668,44 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
         </Field>
         {profile.goalWeightLbs ? (
           latestWeight != null ? (() => {
+            const est = estimateGoalDate(entries, profile, profile.goalWeightLbs, latestWeight);
+            if (est.reached) {
+              return (
+                <div className="ft-card-raised" style={{ marginTop: 12, padding: 12 }}>
+                  <div style={{ fontSize: 12.5, color: COLORS.mint, fontWeight: 700 }}>You're at your goal weight!</div>
+                </div>
+              );
+            }
             const diff = profile.goalWeightLbs - latestWeight;
             const absDiff = Math.abs(diff);
-            const reached = absDiff < 0.5;
-            const weeksEst = !reached && rate > 0 ? Math.ceil(absDiff / rate) : null;
+
+            let etaLine;
+            if (est.onTrack && est.usingReal) {
+              const hasRange = est.earliestDate !== est.latestDate;
+              etaLine = (
+                <>
+                  {hasRange ? (
+                    <>Likely <b>~{prettyDate(est.likelyDate)}</b>, somewhere between {prettyDate(est.earliestDate)} and {prettyDate(est.latestDate)}</>
+                  ) : (
+                    <>~{prettyDate(est.likelyDate)}</>
+                  )} at your actual rate ({fmt(Math.abs(est.effectiveRateWk), 2)} lbs/wk from your logs).
+                  {!est.trendStable && " Trend's still settling, so this may shift."}
+                  {est.recentLoggingGaps && ` Only ${est.recentLoggedCount}/5 of your last 5 days have both weight and food logged — a tighter estimate needs more consistent logging.`}
+                  {est.calorieShiftNote && ` Heads up: you've been ${est.calorieShiftNote}.`}
+                </>
+              );
+            } else if (est.onTrack) {
+              etaLine = <>~{prettyDate(est.likelyDate)} at your set goal rate of {fmt(Math.abs(est.effectiveRateWk), 2)} lbs/wk. Log more weigh-ins and food daily for an estimate based on what's actually happening, not just the target.</>;
+            } else if (est.effectiveRateWk != null) {
+              etaLine = <>Your logged trend is currently moving {est.effectiveRateWk >= 0 ? "up" : "down"}, away from this goal — no ETA until that turns around.</>;
+            } else {
+              etaLine = <>Log weight and food daily for a few more days to see an estimated arrival date based on your actual trend.</>;
+            }
+
             return (
               <div className="ft-card-raised" style={{ marginTop: 12, padding: 12 }}>
-                {reached ? (
-                  <div style={{ fontSize: 12.5, color: COLORS.mint, fontWeight: 700 }}>You're at your goal weight!</div>
-                ) : (
-                  <>
-                    <Row label={diff < 0 ? "Lbs to lose" : "Lbs to gain"} value={fmt(absDiff, 1)} bold />
-                    <div style={{ fontSize: 11, color: COLORS.creamDim, marginTop: 4, lineHeight: 1.4 }}>
-                      {weeksEst != null
-                        ? `~${weeksEst} week${weeksEst !== 1 ? "s" : ""} at your current rate of ${fmt(rate, 2)} lbs/week.`
-                        : "Set a weekly rate on your Weight goal to see an estimated timeline."}
-                    </div>
-                  </>
-                )}
+                <Row label={diff < 0 ? "Lbs to lose" : "Lbs to gain"} value={fmt(absDiff, 1)} bold />
+                <div style={{ fontSize: 11, color: COLORS.creamDim, marginTop: 4, lineHeight: 1.4 }}>{etaLine}</div>
               </div>
             );
           })() : (
