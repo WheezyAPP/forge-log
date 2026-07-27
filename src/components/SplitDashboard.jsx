@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   Dumbbell, ChevronDown, ChevronUp, CalendarDays, Target, Check, RotateCcw,
-  Repeat, ExternalLink, X as XIcon, ChevronRight, ArrowLeft, History, Trophy,
+  Repeat, ExternalLink, X as XIcon, ChevronRight, ChevronLeft, ArrowLeft, History, Trophy,
   AlertTriangle, TrendingUp, Plus, Trash2, Moon, Zap, Lock, Users, Eye, Search, BookmarkPlus, List,
 } from "lucide-react";
 import {
@@ -158,6 +158,11 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   // as a celebration banner right after a save that beat a prior best.
   const [justSavedPRs, setJustSavedPRs] = useState([]);
   const [selectedLift, setSelectedLift] = useState(null);
+  // Attendance calendar in the History tab — which month is showing
+  // (defaults to the current one), and which day (if any) is expanded
+  // to list what was actually logged that day.
+  const [calendarMonth, setCalendarMonth] = useState(() => { const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); return d; });
+  const [expandedCalDay, setExpandedCalDay] = useState(null);
   const [dismissed, setDismissed] = useState(() => loadDismissed(userId));
   const [swapOpen, setSwapOpen] = useState(null);
   const [offSplitPickerOpen, setOffSplitPickerOpen] = useState(false);
@@ -701,8 +706,21 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
 
   const prFlags = useMemo(() => computePRFlags(workoutSessions), [workoutSessions]);
 
+  // Attendance data for the History calendar — a date counts as
+  // "worked out" if ANY exercise was logged that day, regardless of
+  // whether it was a scheduled lifting day or a rest day on the split;
+  // this is raw attendance visibility, not a comparison against the
+  // plan. sessionsByDate groups the exercise NAMES logged per date (not
+  // full session objects) since that's all the expanded day view needs.
+  const workoutDatesSet = useMemo(() => new Set(workoutSessions.map(s => s.date)), [workoutSessions]);
+  const sessionsByDate = useMemo(() => {
+    const map = {};
+    for (const s of workoutSessions) (map[s.date] ||= new Set()).add(s.exercise);
+    return map;
+  }, [workoutSessions]);
+
   if (subTab === "splitInfo" || view === "picker") return (
-    <div>
+    <div key={subTab === "splitInfo" ? "view-splitInfo" : "view-picker"} className="ft-row-enter">
       <div className="ft-label" style={{ marginBottom: 10 }}>Select your split — saved to your profile</div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(200px, 1fr))", gap:8, marginBottom:18 }}>
         {SPLITS.map(s => {
@@ -841,7 +859,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   );
 
   if (view === "locked") return (
-    <div>
+    <div key="view-locked" className="ft-row-enter">
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, marginBottom:14 }}>
         <div>
           <div style={{ fontSize:10, fontWeight:700, letterSpacing:".08em", textTransform:"uppercase", color:selected.accentColor }}>Locked in</div>
@@ -979,7 +997,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   if (view === "rest") {
     const day = next3[dayOffset];
     return (
-      <div>
+      <div key="view-rest" className="ft-row-enter">
         <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("locked")}><ArrowLeft size={13}/> Back</button>
         <div className="ft-card" style={{ padding:36, textAlign:"center" }}>
           <Moon size={26} color={C.creamDim} style={{ margin:"0 auto 10px", display:"block" }} />
@@ -997,7 +1015,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     const completed = blocks.filter(b => b.sets.some(s => s.w && s.r)).length;
     const ac = day?.def?.color || C.ember;
     return (
-      <div>
+      <div key="view-day" className="ft-row-enter">
         <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => {
           if (dirty && !window.confirm("You have unsaved sets on this workout — leave without saving?")) return;
           setView("locked");
@@ -1356,7 +1374,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   }
 
   if (view === "planChoice") return (
-    <div>
+    <div key="view-planChoice" className="ft-row-enter">
       <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("locked")}><ArrowLeft size={13}/> Back</button>
       <div style={{ fontSize:20, fontWeight:800, marginBottom:4 }}>Custom workout</div>
       <div style={{ fontSize:11.5, color:C.creamDim, marginBottom:16, lineHeight:1.5 }}>
@@ -1376,7 +1394,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   if (view === "planWeek" && planDrafts) {
     const isEditingExisting = existingPlanLength() > 0;
     return (
-    <div>
+    <div key="view-planWeek" className="ft-row-enter">
       <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("locked")}><ArrowLeft size={13}/> Back</button>
       <div style={{ fontSize:20, fontWeight:800, marginBottom:4 }}>{isEditingExisting ? "Edit" : "Plan"} your next {planLength} days</div>
       <div style={{ fontSize:11.5, color:C.creamDim, marginBottom:16, lineHeight:1.5 }}>
@@ -1537,8 +1555,64 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   }
 
   if (view === "history") return (
-    <div>
+    <div key="view-history" className="ft-row-enter">
       <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("locked")}><ArrowLeft size={13}/> Back</button>
+
+      <div className="ft-card" style={{ padding:16, marginBottom:16 }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+          <button onClick={() => setCalendarMonth(m => { const d = new Date(m); d.setMonth(d.getMonth()-1); return d; })} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer", padding:4 }} aria-label="Previous month"><ChevronLeft size={16}/></button>
+          <div style={{ fontSize:13, fontWeight:700 }}>{calendarMonth.toLocaleDateString(undefined, { month:"long", year:"numeric" })}</div>
+          <button onClick={() => setCalendarMonth(m => { const d = new Date(m); d.setMonth(d.getMonth()+1); return d; })} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer", padding:4 }} aria-label="Next month"><ChevronRight size={16}/></button>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:4, marginBottom:4 }}>
+          {["S","M","T","W","T","F","S"].map((d,i) => <div key={i} style={{ textAlign:"center", fontSize:9, color:C.creamDim, fontWeight:700 }}>{d}</div>)}
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:4 }}>
+          {(() => {
+            const startWeekday = calendarMonth.getDay(); // calendarMonth is always the 1st of its month
+            const daysInMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0).getDate();
+            const cells = [];
+            for (let i = 0; i < startWeekday; i++) cells.push(null);
+            for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+            const todayKey = localDateStr(today);
+            return cells.map((d, i) => {
+              if (d === null) return <div key={"blank" + i} />;
+              const cellDate = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), d);
+              const dateKey = localDateStr(cellDate);
+              const worked = workoutDatesSet.has(dateKey);
+              const isToday = dateKey === todayKey;
+              const isFuture = cellDate > today;
+              const isExpanded = expandedCalDay === dateKey;
+              return (
+                <button
+                  key={dateKey}
+                  onClick={() => worked && setExpandedCalDay(isExpanded ? null : dateKey)}
+                  style={{
+                    aspectRatio: "1", borderRadius: 6, fontSize: 11, fontWeight: isToday ? 800 : 500,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    background: worked ? (isExpanded ? C.ember : "rgba(79,173,255,0.18)") : "transparent",
+                    color: worked && isExpanded ? "#0A1E27" : C.cream,
+                    opacity: isFuture && !worked ? 0.35 : 1,
+                    border: isToday ? `1.5px solid ${C.ember}` : "1px solid transparent",
+                    cursor: worked ? "pointer" : "default",
+                  }}
+                >{d}</button>
+              );
+            });
+          })()}
+        </div>
+        {expandedCalDay && sessionsByDate[expandedCalDay] && (
+          <div className="ft-card-raised" style={{ marginTop:10, padding:10, fontSize:11.5 }}>
+            <div style={{ fontWeight:700, marginBottom:4 }}>{fmtDay(new Date(expandedCalDay + "T00:00:00"))}</div>
+            <div style={{ color:C.creamDim }}>{[...sessionsByDate[expandedCalDay]].join(", ")}</div>
+          </div>
+        )}
+        <div style={{ display:"flex", alignItems:"center", gap:12, marginTop:12, fontSize:10, color:C.creamDim }}>
+          <span style={{ display:"flex", alignItems:"center", gap:4 }}><span style={{ width:10, height:10, borderRadius:3, background:"rgba(79,173,255,0.18)", display:"inline-block" }}/> Worked out</span>
+          <span style={{ display:"flex", alignItems:"center", gap:4 }}><span style={{ width:10, height:10, borderRadius:3, border:`1px solid ${C.creamDim}`, display:"inline-block" }}/> No log</span>
+        </div>
+      </div>
+
       <div style={{ fontSize:16, fontWeight:700, marginBottom:4 }}>Lifts you've logged</div>
       <div style={{ fontSize:11, color:C.creamDim, marginBottom:12 }}>Tap a lift for full history and progress charts.</div>
       {historyByExercise.length === 0 && <div className="ft-card" style={{ padding:30, textAlign:"center", fontSize:13, color:C.creamDim }}>No workouts logged yet.</div>}
@@ -1572,7 +1646,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     const rpeValues = h.sessions.flatMap(s => (s.sets || []).map(set => parseFloat(set.rpe)).filter(v => !Number.isNaN(v) && v > 0));
     const avgRpe = rpeValues.length ? Math.round((rpeValues.reduce((a,b) => a+b, 0) / rpeValues.length) * 10) / 10 : null;
     return (
-      <div>
+      <div key="view-lift" className="ft-row-enter">
         <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("history")}><ArrowLeft size={13}/> Back to lifts</button>
         <div style={{ fontSize:16, fontWeight:700 }}>{h.exercise}</div>
         <div style={{ fontSize:11, color:C.ember, marginBottom:12 }}>{h.grp}</div>

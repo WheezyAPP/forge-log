@@ -1596,6 +1596,15 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
     // that's a deliberate, informed choice the same way it bypasses the
     // confidence floor above.
     if (!result.trendStable) return;
+    // Same rationale as the trendStable gate above, different failure
+    // mode: a rate that's consistently implausible throughout the
+    // window (not accelerating, so trendStable alone won't catch it)
+    // still shouldn't auto-adopt. Real individual variation from the
+    // formula estimate is normally cited around ±10-15%; a bigger gap
+    // is far more likely to mean weigh-in conditions haven't stabilized
+    // yet than a genuinely different metabolism.
+    const formulaTdee = computeStats(profile, latestEntry?.weight ?? FALLBACK_WEIGHT_ESTIMATE_LBS).formulaTdee;
+    if (Math.abs(result.tdee - formulaTdee) > formulaTdee * 0.25) return;
     const newTdee = Math.round(result.tdee);
     if (newTdee === Math.round(profile.adaptiveTdee)) return; // no real change
     handleProfileChange({ adaptiveTdee: newTdee, adaptiveTdeeSetOn: todayStr(), adaptiveTdeeUpdatedAt: new Date().toISOString() });
@@ -5145,6 +5154,23 @@ function AdaptiveTdeeCard({ adaptive, profile, latestWeight, onProfileChange }) 
         // settle before adopting, not a sign anything's broken.
         <div className="ft-card-raised" style={{ padding: "8px 10px", marginTop: 8, fontSize: 10.5, color: COLORS.amber, lineHeight: 1.4 }}>
           Trend not settled yet — the rate over the last half of this window ({adaptive.secondHalfRateLbsPerWeek > 0 ? "+" : ""}{fmt(adaptive.secondHalfRateLbsPerWeek, 2)} lbs/wk) is notably different from earlier in it. Often means water weight catching up to a recent change, not a real shift in maintenance — this number may keep moving for another week or two.
+        </div>
+      )}
+      {Math.abs(diff) > formulaTdee * 0.25 && (
+        // A different failure mode than trend instability above — this
+        // can fire even when the rate holds perfectly steady throughout
+        // the window (trendStable: true), which is exactly what real
+        // data surfaced: a consistently fast early rate (not
+        // accelerating, just implausibly fast the whole time) backed out
+        // a TDEE within 5 cal of bare BMR — physiologically implausible
+        // for anyone who isn't bedridden. Real individual variation from
+        // the Mifflin-St Jeor formula is normally cited around ±10-15%;
+        // a gap this much bigger is far more likely to mean weigh-in
+        // conditions have shifted (different time of day, sodium, a
+        // recent diet change still working through water/glycogen/food
+        // volume) than a genuinely different metabolism.
+        <div className="ft-card-raised" style={{ padding: "8px 10px", marginTop: 8, fontSize: 10.5, color: COLORS.amber, lineHeight: 1.4 }}>
+          This is {fmt(Math.abs(diff) / formulaTdee * 100)}% {diff < 0 ? "below" : "above"} the formula estimate — a bigger gap than normal individual variation usually explains. Most likely cause: weigh-ins haven't stabilized yet (early in a diet change, inconsistent conditions), not that your real metabolism actually works this differently. Worth more consistent logging before trusting this over the formula.
         </div>
       )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${COLORS.border}` }}>
