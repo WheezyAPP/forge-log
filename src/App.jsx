@@ -74,6 +74,9 @@ import {
   loadCustomDayPlans,
   saveCustomDayPlan,
   deleteCustomDayPlan,
+  loadWorkoutAttendance,
+  markWorkoutAttendance,
+  unmarkWorkoutAttendance,
   loadCustomSplitTemplates,
   saveCustomSplitTemplate,
   deleteCustomSplitTemplate,
@@ -1349,6 +1352,9 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   const [workoutSessions, setWorkoutSessions] = useState([]);
   const [maxAttempts, setMaxAttempts] = useState([]);
   const [customDayPlans, setCustomDayPlans] = useState({});
+  // Set of date strings marked "worked out" with no exercise data — see
+  // storage.js for why this is deliberately separate from workoutSessions.
+  const [workoutAttendance, setWorkoutAttendance] = useState(new Set());
   const [customSplitTemplates, setCustomSplitTemplates] = useState([]);
   const [weighIns, setWeighIns] = useState({});  // { "2026-07-01": [{id,time,weight,tag},...] }
   const [userSplitId, setUserSplitIdState] = useState(null);
@@ -1365,10 +1371,11 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
   useEffect(() => {
     (async () => {
-      const [p, e, ws, splitId, splitStart, ma, cdp, cst] = await Promise.all([
+      const [p, e, ws, splitId, splitStart, ma, cdp, cst, wa] = await Promise.all([
         loadProfile(userId), loadEntries(userId),
         loadWorkoutSessions(userId), getUserSplitId(userId), getUserSplitStartedOn(userId),
         loadMaxAttempts(userId), loadCustomDayPlans(userId), loadCustomSplitTemplates(userId),
+        loadWorkoutAttendance(userId),
       ]);
       setProfile(p);
       setEntries(e);
@@ -1378,6 +1385,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       setMaxAttempts(ma);
       setCustomDayPlans(cdp);
       setCustomSplitTemplates(cst);
+      setWorkoutAttendance(wa);
       setLoaded(true);
     })();
   }, [userId]);
@@ -1516,6 +1524,16 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   async function handleDeleteCustomDayPlan(date) {
     setCustomDayPlans(prev => { const next = { ...prev }; delete next[date]; return next; });
     await deleteCustomDayPlan(userId, date);
+  }
+  async function handleToggleWorkoutAttendance(date) {
+    const alreadyMarked = workoutAttendance.has(date);
+    setWorkoutAttendance(prev => {
+      const next = new Set(prev);
+      if (alreadyMarked) next.delete(date); else next.add(date);
+      return next;
+    });
+    if (alreadyMarked) await unmarkWorkoutAttendance(userId, date);
+    else await markWorkoutAttendance(userId, date);
   }
   async function handleSaveCustomSplitTemplate(template) {
     const saved = await saveCustomSplitTemplate(userId, template);
@@ -2067,6 +2085,8 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
             customSplitTemplates={customSplitTemplates}
             onSaveCustomSplitTemplate={handleSaveCustomSplitTemplate}
             onDeleteCustomSplitTemplate={handleDeleteCustomSplitTemplate}
+            workoutAttendance={workoutAttendance}
+            onToggleWorkoutAttendance={handleToggleWorkoutAttendance}
           />
         </>
       )}

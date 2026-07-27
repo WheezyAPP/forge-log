@@ -663,6 +663,68 @@ export async function deleteCustomDayPlan(userId, date) {
   }
 }
 
+// ---------- Workout attendance ----------
+// Backfilling "I worked out this day" for days logged before someone
+// started using the app (or just forgot to log in the moment) —
+// deliberately just a date, no exercise data. Kept as its own table
+// rather than a fake workout_sessions row specifically so it can never
+// pollute PR tracking, volume totals, or exercise history with data
+// that was never actually logged — the History calendar renders these
+// with a distinct visual treatment from real logged days for the same
+// reason (see the attendance calendar in SplitDashboard).
+export async function loadWorkoutAttendance(userId) {
+  if (!userId) return new Set();
+  try {
+    const { data, error } = await supabase.from("workout_attendance").select("date").eq("user_id", userId);
+    if (error) throw error;
+    const dates = (data || []).map(r => r.date);
+    writeCache("workoutAttendance", userId, dates);
+    return new Set(dates);
+  } catch (e) {
+    console.error("loadWorkoutAttendance failed, using cache:", e);
+    return new Set(readCache("workoutAttendance", userId, []));
+  }
+}
+
+export async function markWorkoutAttendance(userId, date) {
+  if (!userId) return;
+  const cached = readCache("workoutAttendance", userId, []);
+  if (!cached.includes(date)) writeCache("workoutAttendance", userId, [...cached, date]);
+
+  const row = { user_id: userId, date };
+  if (!isOnline()) {
+    enqueueOp("markWorkoutAttendanceRaw", [row]);
+    return;
+  }
+  try {
+    const { error } = await supabase.from("workout_attendance").upsert(row, { onConflict: "user_id,date" });
+    if (error) throw error;
+  } catch (e) {
+    console.error("markWorkoutAttendance failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("markWorkoutAttendanceRaw", [row]);
+  }
+}
+
+export async function unmarkWorkoutAttendance(userId, date) {
+  if (!userId) return;
+  const cached = readCache("workoutAttendance", userId, []);
+  writeCache("workoutAttendance", userId, cached.filter(d => d !== date));
+
+  if (!isOnline()) {
+    enqueueOp("unmarkWorkoutAttendance", [userId, date]);
+    return;
+  }
+  try {
+    const { error } = await supabase.from("workout_attendance").delete().eq("user_id", userId).eq("date", date);
+    if (error) throw error;
+  } catch (e) {
+    console.error("unmarkWorkoutAttendance failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("unmarkWorkoutAttendance", [userId, date]);
+  }
+}
+
 function customSplitTemplateFromRow(row) {
   return { id: row.id, name: row.name, days: row.days || [] };
 }
@@ -1125,6 +1187,14 @@ export const offlineExecutors = {
   },
   deleteCustomDayPlan: async (userId, date) => {
     const { error } = await supabase.from("custom_day_plans").delete().eq("user_id", userId).eq("date", date);
+    if (error) throw error;
+  },
+  markWorkoutAttendanceRaw: async (row) => {
+    const { error } = await supabase.from("workout_attendance").upsert(row, { onConflict: "user_id,date" });
+    if (error) throw error;
+  },
+  unmarkWorkoutAttendance: async (userId, date) => {
+    const { error } = await supabase.from("workout_attendance").delete().eq("user_id", userId).eq("date", date);
     if (error) throw error;
   },
   saveCustomSplitTemplateRaw: async (row) => {

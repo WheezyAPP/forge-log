@@ -134,7 +134,7 @@ function computePRFlags(sessions) {
   return flags;
 }
 
-export default function SplitDashboard({ userId, userSplitId, splitStartedOn, onSplitChange, workoutSessions, setWorkoutSessions, latestWeight, gender, subTab, setTab, followSource, onBlocksChange, onDirtyChange, dedicatedProgressiveOverload, customDayPlans, onSaveCustomDayPlan, onDeleteCustomDayPlan, customSplitTemplates, onSaveCustomSplitTemplate, onDeleteCustomSplitTemplate }) {
+export default function SplitDashboard({ userId, userSplitId, splitStartedOn, onSplitChange, workoutSessions, setWorkoutSessions, latestWeight, gender, subTab, setTab, followSource, onBlocksChange, onDirtyChange, dedicatedProgressiveOverload, customDayPlans, onSaveCustomDayPlan, onDeleteCustomDayPlan, customSplitTemplates, onSaveCustomSplitTemplate, onDeleteCustomSplitTemplate, workoutAttendance, onToggleWorkoutAttendance }) {
   const [view, setView] = useState("picker");
   const [selected, setSelected] = useState(() => SPLITS.find(s => s.id === userSplitId) || null);
   const [weekNum, setWeekNum] = useState(1);
@@ -1580,21 +1580,32 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
               const cellDate = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), d);
               const dateKey = localDateStr(cellDate);
               const worked = workoutDatesSet.has(dateKey);
+              const attended = !worked && !!workoutAttendance?.has(dateKey);
               const isToday = dateKey === todayKey;
               const isFuture = cellDate > today;
               const isExpanded = expandedCalDay === dateKey;
+              // Real logged day -> expand/collapse its exercise list.
+              // Backfilled-only day -> tap unmarks it (nothing to expand).
+              // Empty past/today day -> tap marks it as attended.
+              // Future day -> no action either way.
+              const handleClick = () => {
+                if (worked) setExpandedCalDay(isExpanded ? null : dateKey);
+                else if (attended) onToggleWorkoutAttendance?.(dateKey);
+                else if (!isFuture) onToggleWorkoutAttendance?.(dateKey);
+              };
               return (
                 <button
                   key={dateKey}
-                  onClick={() => worked && setExpandedCalDay(isExpanded ? null : dateKey)}
+                  onClick={handleClick}
+                  title={attended ? "Marked as worked out — tap to unmark" : (!worked && !isFuture ? "Tap to mark as worked out" : undefined)}
                   style={{
                     aspectRatio: "1", borderRadius: 6, fontSize: 11, fontWeight: isToday ? 800 : 500,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     background: worked ? (isExpanded ? C.ember : "rgba(79,173,255,0.18)") : "transparent",
                     color: worked && isExpanded ? "#0A1E27" : C.cream,
-                    opacity: isFuture && !worked ? 0.35 : 1,
-                    border: isToday ? `1.5px solid ${C.ember}` : "1px solid transparent",
-                    cursor: worked ? "pointer" : "default",
+                    opacity: isFuture && !worked && !attended ? 0.35 : 1,
+                    border: isToday ? `1.5px solid ${C.ember}` : attended ? `1.5px dashed ${C.lime}` : "1px solid transparent",
+                    cursor: isFuture && !worked && !attended ? "default" : "pointer",
                   }}
                 >{d}</button>
               );
@@ -1607,8 +1618,10 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
             <div style={{ color:C.creamDim }}>{[...sessionsByDate[expandedCalDay]].join(", ")}</div>
           </div>
         )}
-        <div style={{ display:"flex", alignItems:"center", gap:12, marginTop:12, fontSize:10, color:C.creamDim }}>
-          <span style={{ display:"flex", alignItems:"center", gap:4 }}><span style={{ width:10, height:10, borderRadius:3, background:"rgba(79,173,255,0.18)", display:"inline-block" }}/> Worked out</span>
+        <div style={{ fontSize:10, color:C.creamDim, marginTop:10 }}>Tap any empty past day to mark it as worked out — no exercise details needed, just a record you trained.</div>
+        <div style={{ display:"flex", alignItems:"center", gap:12, marginTop:8, fontSize:10, color:C.creamDim, flexWrap:"wrap" }}>
+          <span style={{ display:"flex", alignItems:"center", gap:4 }}><span style={{ width:10, height:10, borderRadius:3, background:"rgba(79,173,255,0.18)", display:"inline-block" }}/> Worked out (logged)</span>
+          <span style={{ display:"flex", alignItems:"center", gap:4 }}><span style={{ width:10, height:10, borderRadius:3, border:`1.5px dashed ${C.lime}`, display:"inline-block" }}/> Marked, no details</span>
           <span style={{ display:"flex", alignItems:"center", gap:4 }}><span style={{ width:10, height:10, borderRadius:3, border:`1px solid ${C.creamDim}`, display:"inline-block" }}/> No log</span>
         </div>
       </div>
