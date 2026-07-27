@@ -40,7 +40,7 @@ This is just a shared password between you and whatever calls `/api/send-notific
 
 ## 4. Set up something to actually call the endpoint on a schedule
 
-**Don't use Vercel's built-in Cron for this** — confirmed it's capped at once-per-day on the Hobby (free) plan, with imprecise timing (fires sometime within the scheduled hour, not at a specific minute). None of the rules here (every 2 hours, specific 4am/10am checkpoints, every 4 hours) work with that.
+**Don't use Vercel's built-in Cron for this** — confirmed it's capped at once-per-day on the Hobby (free) plan, with imprecise timing (fires sometime within the scheduled hour, not at a specific minute). The rules here check in at 5 fixed times a day (7:30am, noon, 3pm, 6pm, 9pm local time per user) — that needs a poll every 15-30 min to catch each one reliably, which Vercel's Hobby Cron can't do.
 
 The good news: the restriction is only on Vercel's *own* scheduler UI. `/api/send-notifications` is a completely normal HTTP endpoint — anything that can send a GET request on a timer can trigger it, Vercel plan doesn't matter.
 
@@ -65,7 +65,7 @@ https://your-app.vercel.app/api/send-notifications?secret=YOUR_NOTIFY_SECRET
 It returns a small JSON summary — how many subscribed users it checked and which categories fired for each, e.g.:
 
 ```json
-{ "checked": 2, "sent": [{ "userId": "...", "category": "water" }] }
+{ "checked": 2, "sent": [{ "userId": "...", "category": "water_1200" }] }
 ```
 
 If nothing fires, that's expected unless one of you is actually due for a reminder right now (goal not hit yet, enough time passed, etc.) — the rules are deliberately conservative about when they trigger.

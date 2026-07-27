@@ -868,6 +868,16 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       </div>
 
       <div style={{ fontSize:11, color:C.creamDim, marginBottom:10 }}>Next 4 days — tap one to log it, or reopen a logged day to edit.</div>
+      {(() => {
+        const planSpan = existingPlanLength();
+        if (planSpan <= 4) return null; // 4 or fewer days is already fully visible in the list below — nothing extra to show
+        const endDate = addDays(today, planSpan - 1);
+        return (
+          <div style={{ fontSize:10.5, color:C.creamDim, marginBottom:14, marginTop:-4 }}>
+            Custom plan running through <span style={{ color:C.cream, fontWeight:600 }}>{fmtDay(endDate)}</span> — tap Edit your plan above to see or change any day past what's listed below.
+          </div>
+        );
+      })()}
 
       {next3.map(day => {
         const ac = day.def?.color || C.creamDim;
