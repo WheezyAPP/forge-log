@@ -2104,6 +2104,12 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
           dedicatedProgressiveOverload={profile.dedicatedProgressiveOverload}
           onSplitChange={handleSplitChange}
           onExit={() => setPartnerMode(false)}
+          customDayPlans={customDayPlans}
+          onSaveCustomDayPlan={handleSaveCustomDayPlan}
+          onDeleteCustomDayPlan={handleDeleteCustomDayPlan}
+          customSplitTemplates={customSplitTemplates}
+          onSaveCustomSplitTemplate={handleSaveCustomSplitTemplate}
+          onDeleteCustomSplitTemplate={handleDeleteCustomSplitTemplate}
         />
       )}
 

@@ -29,7 +29,11 @@
 import { useState, useEffect, useMemo } from "react";
 import { Users, X, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import SplitDashboard from "./SplitDashboard";
-import { fetchUsers, loadProfile, loadEntries, loadWorkoutSessions, getUserSplitId, getUserSplitStartedOn } from "../lib/storage";
+import {
+  fetchUsers, loadProfile, loadEntries, loadWorkoutSessions, getUserSplitId, getUserSplitStartedOn,
+  loadCustomDayPlans, saveCustomDayPlan, deleteCustomDayPlan,
+  loadCustomSplitTemplates, saveCustomSplitTemplate, deleteCustomSplitTemplate,
+} from "../lib/storage";
 import { supabase } from "../lib/supabase";
 
 const C = {
@@ -46,6 +50,8 @@ function todayStr() {
 export default function PartnerTraining({
   userId, userName, userSplitId, splitStartedOn, workoutSessions, setWorkoutSessions,
   latestWeight, gender, dedicatedProgressiveOverload, onSplitChange, onExit,
+  customDayPlans, onSaveCustomDayPlan, onDeleteCustomDayPlan,
+  customSplitTemplates, onSaveCustomSplitTemplate, onDeleteCustomSplitTemplate,
 }) {
   const [allUsers, setAllUsers] = useState([]);
   const [partnerId, setPartnerId] = useState(null);
@@ -69,8 +75,9 @@ export default function PartnerTraining({
   async function choosePartner(u) {
     setLoadingPartner(true);
     try {
-      const [profile, entries, splitId, splitStart, sessions] = await Promise.all([
+      const [profile, entries, splitId, splitStart, sessions, dayPlans, splitTemplates] = await Promise.all([
         loadProfile(u.id), loadEntries(u.id), getUserSplitId(u.id), getUserSplitStartedOn(u.id), loadWorkoutSessions(u.id),
+        loadCustomDayPlans(u.id), loadCustomSplitTemplates(u.id),
       ]);
       const dates = Object.keys(entries).sort();
       const latest = dates[dates.length - 1];
@@ -80,6 +87,8 @@ export default function PartnerTraining({
         userSplitId: splitId,
         splitStartedOn: splitStart,
         workoutSessions: sessions,
+        customDayPlans: dayPlans,
+        customSplitTemplates: splitTemplates,
       });
       setPartnerName(u.name);
       setPartnerId(u.id);
@@ -111,6 +120,32 @@ export default function PartnerTraining({
 
   function handlePartnerSplitChange(splitId) {
     setPartnerData(prev => prev ? { ...prev, userSplitId: splitId, splitStartedOn: todayStr() } : prev);
+  }
+
+  // Mirrors handlePartnerSplitChange's pattern for the same reason: each
+  // side's SplitDashboard instance calls these the same way it would for
+  // the app's one real logged-in user, so partnerId has to be threaded in
+  // here rather than assumed to be userId.
+  async function handlePartnerSaveCustomDayPlan(plan) {
+    const saved = await saveCustomDayPlan(partnerId, plan);
+    if (saved) setPartnerData(prev => prev ? { ...prev, customDayPlans: { ...prev.customDayPlans, [plan.date]: saved } } : prev);
+  }
+  async function handlePartnerDeleteCustomDayPlan(date) {
+    setPartnerData(prev => {
+      if (!prev) return prev;
+      const next = { ...prev.customDayPlans };
+      delete next[date];
+      return { ...prev, customDayPlans: next };
+    });
+    await deleteCustomDayPlan(partnerId, date);
+  }
+  async function handlePartnerSaveCustomSplitTemplate(template) {
+    const saved = await saveCustomSplitTemplate(partnerId, template);
+    if (saved) setPartnerData(prev => prev ? { ...prev, customSplitTemplates: [...(prev.customSplitTemplates || []), saved] } : prev);
+  }
+  async function handlePartnerDeleteCustomSplitTemplate(id) {
+    setPartnerData(prev => prev ? { ...prev, customSplitTemplates: (prev.customSplitTemplates || []).filter(t => t.id !== id) } : prev);
+    await deleteCustomSplitTemplate(partnerId, id);
   }
 
   // Real-time sync — only active once a partner is actually chosen.
@@ -215,6 +250,12 @@ export default function PartnerTraining({
             setTab={() => {}}
             onBlocksChange={setHostBlocks}
             dedicatedProgressiveOverload={dedicatedProgressiveOverload}
+            customDayPlans={customDayPlans}
+            onSaveCustomDayPlan={onSaveCustomDayPlan}
+            onDeleteCustomDayPlan={onDeleteCustomDayPlan}
+            customSplitTemplates={customSplitTemplates}
+            onSaveCustomSplitTemplate={onSaveCustomSplitTemplate}
+            onDeleteCustomSplitTemplate={onDeleteCustomSplitTemplate}
           />
         </div>
         <div>
@@ -235,6 +276,12 @@ export default function PartnerTraining({
               setTab={() => {}}
               followSource={hostBlocks}
               dedicatedProgressiveOverload={partnerData.profile?.dedicatedProgressiveOverload}
+              customDayPlans={partnerData.customDayPlans}
+              onSaveCustomDayPlan={handlePartnerSaveCustomDayPlan}
+              onDeleteCustomDayPlan={handlePartnerDeleteCustomDayPlan}
+              customSplitTemplates={partnerData.customSplitTemplates}
+              onSaveCustomSplitTemplate={handlePartnerSaveCustomSplitTemplate}
+              onDeleteCustomSplitTemplate={handlePartnerDeleteCustomSplitTemplate}
             />
           )}
         </div>
