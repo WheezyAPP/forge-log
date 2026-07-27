@@ -256,6 +256,24 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   // list already used for search, just unfiltered and grouped by letter.
   const [browseOpen, setBrowseOpen] = useState(null);
 
+  // Detects a saved custom plan already covering some of today-forward,
+  // and how many days it actually spans — extends to the LAST planned
+  // day found within a 30-day lookahead, tolerating gaps (a day left
+  // untouched mid-plan, or a rest day) rather than stopping at the first
+  // missing one. Lets the main button jump straight into editing the
+  // FULL existing plan at its real length instead of making someone
+  // re-guess "was this 7 or 30 days" — and matters more than it might
+  // seem, since the day-list above only ever shows the next 4 days:
+  // once a 30-day plan is locked in, days 5-30 aren't reachable any
+  // other way.
+  function existingPlanLength() {
+    let len = 0;
+    for (let i = 0; i < 30; i++) {
+      if (customDayPlans?.[localDateStr(addDays(today, i))]) len = i + 1;
+    }
+    return len;
+  }
+
   function openPlanWeek(days) {
     const drafts = {};
     for (let i = 0; i < days; i++) {
@@ -837,7 +855,14 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
             </div>
           )}
           <button className="ft-btn ft-btn-ghost" onClick={() => setView("history")}><History size={13}/> History</button>
-          <button className="ft-btn ft-btn-ghost" onClick={() => setView("planChoice")}><CalendarDays size={13}/> Custom workout</button>
+          {(() => {
+            const existingLen = existingPlanLength();
+            return existingLen > 0 ? (
+              <button className="ft-btn ft-btn-ghost" onClick={() => openPlanWeek(existingLen)}><CalendarDays size={13}/> Edit your plan</button>
+            ) : (
+              <button className="ft-btn ft-btn-ghost" onClick={() => setView("planChoice")}><CalendarDays size={13}/> Custom workout</button>
+            );
+          })()}
           <button className="ft-btn ft-btn-ghost" onClick={changeSplit}><RotateCcw size={13}/> Change split</button>
         </div>
       </div>
@@ -1338,13 +1363,20 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     </div>
   );
 
-  if (view === "planWeek" && planDrafts) return (
+  if (view === "planWeek" && planDrafts) {
+    const isEditingExisting = existingPlanLength() > 0;
+    return (
     <div>
       <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("locked")}><ArrowLeft size={13}/> Back</button>
-      <div style={{ fontSize:20, fontWeight:800, marginBottom:4 }}>Plan your next {planLength} days</div>
+      <div style={{ fontSize:20, fontWeight:800, marginBottom:4 }}>{isEditingExisting ? "Edit" : "Plan"} your next {planLength} days</div>
       <div style={{ fontSize:11.5, color:C.creamDim, marginBottom:16, lineHeight:1.5 }}>
-        Build out exactly what each day should look like ahead of time — your own exercises, your own day names, or mark it Rest. Once locked in, these dates override your regular split until they pass; walk into the gym and just log weight and reps.
+        {isEditingExisting
+          ? "This is the plan you already locked in — change anything below, or clear a day to drop it. Nothing saves until you lock it in again."
+          : "Build out exactly what each day should look like ahead of time — your own exercises, your own day names, or mark it Rest. Once locked in, these dates override your regular split until they pass; walk into the gym and just log weight and reps."}
       </div>
+      {isEditingExisting && (
+        <button className="ft-btn ft-btn-ghost" style={{ marginBottom:14, fontSize:11 }} onClick={() => setView("planChoice")}>Start a different plan instead</button>
+      )}
 
       {customSplitTemplates && customSplitTemplates.length > 0 && (
         <div className="ft-card" style={{ padding:14, marginBottom:14 }}>
@@ -1492,6 +1524,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       <button className="ft-btn ft-btn-primary" style={{ width:"100%" }} onClick={lockInWeek}><Check size={14}/> Lock in this plan</button>
     </div>
   );
+  }
 
   if (view === "history") return (
     <div>

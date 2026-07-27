@@ -1,12 +1,13 @@
 // api/send-notifications.js — the notification scheduler. Meant to be
 // hit on a timer (every 15-30 min) by an external scheduler, since
 // Vercel's own Cron is capped at once/day on the Hobby plan — nowhere
-// near what "every 2 hours" or "4am/10am" needs. This file doesn't care
-// who calls it, only THAT the caller knows the shared secret below.
+// near what a same-day 5-times-a-day schedule needs. This file doesn't
+// care who calls it, only THAT the caller knows the shared secret below.
 //
 // Runs the water/weight/food rules for every subscribed device, using
 // each person's own local time (captured at subscribe time) rather than
-// a single server-wide clock — see zonedTimeToUtcMs / getLocalNow.
+// a single server-wide clock — see getLocalNow. All three categories
+// check in against the same shared timetable — see CHECK_TIMES below.
 //
 // Vercel auto-detects any file in /api as a serverless function; no
 // extra config needed for that part.
@@ -24,27 +25,7 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails("mailto:admin@forgelog.app", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 }
 
-// ---------- Timezone helpers ----------
-// Standard vanilla-JS technique: naive UTC guess, see how Intl renders
-// it in the target zone, measure the drift, correct once. Timezone
-// offsets are piecewise-constant, so one correction pass is exact —
-// verified directly against known offsets (America/New_York in both
-// EDT and EST, America/Los_Angeles) before this went into the rule
-// engine below.
-function zonedTimeToUtcMs(dateStr, timeStr, timeZone) {
-  const [y, mo, d] = dateStr.split("-").map(Number);
-  const [h, m] = timeStr.split(":").map(Number);
-  const naiveUtc = Date.UTC(y, mo - 1, d, h, m);
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone, hour12: false,
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
-  });
-  const parts = Object.fromEntries(fmt.formatToParts(new Date(naiveUtc)).map(p => [p.type, p.value]));
-  const hour24 = parts.hour === "24" ? 0 : +parts.hour;
-  const asUtcIfLocal = Date.UTC(+parts.year, +parts.month - 1, +parts.day, hour24, +parts.minute, +parts.second);
-  return naiveUtc - (asUtcIfLocal - naiveUtc);
-}
+// ---------- Timezone helper ----------
 
 // "What's the date and time right now, from this person's chair" — the
 // one thing every rule below actually needs to know first.
@@ -65,27 +46,33 @@ function getLocalNow(timeZone) {
   };
 }
 
-// ---------- Food's "last logged" signal ----------
-// Meal IDs are `${Date.now()}-${random}` (see addMeal in App.jsx) — that
-// gives an exact per-meal timestamp without needing a schema change.
-// Falls back to the row's updated_at for the "typed calories directly,
-// skipped meal tracking" path, where there's no meal entry to read a
-// timestamp from at all.
-function getLastFoodLogMs(entry) {
-  if (!entry) return null;
-  const mealTimestamps = (entry.meals || [])
-    .map(m => parseInt(String(m.id).split("-")[0], 10))
-    .filter(t => !Number.isNaN(t));
-  if (mealTimestamps.length) return Math.max(...mealTimestamps);
-  if (entry.calories_consumed > 0) return new Date(entry.updated_at).getTime();
-  return null;
-}
+// ---------- Shared check-in schedule ----------
+// Replaces what used to be three separate systems — weight's one-shot
+// 4am/10am checkpoints, water's rolling every-2h interval, food's
+// rolling every-4h interval — with one shared timetable all three now
+// check against: 7:30am, noon, 3pm, 6pm, 9pm local time.
+const CHECK_TIMES = [
+  { key: "0730", minutes: 7 * 60 + 30 },
+  { key: "1200", minutes: 12 * 60 },
+  { key: "1500", minutes: 15 * 60 },
+  { key: "1800", minutes: 18 * 60 },
+  { key: "2100", minutes: 21 * 60 },
+];
 
-function getLastWaterLogMs(entry, dateStr, timeZone) {
-  const logs = entry?.water_logs || [];
-  if (!logs.length) return null;
-  const times = logs.filter(w => w.time).map(w => zonedTimeToUtcMs(dateStr, w.time, timeZone));
-  return times.length ? Math.max(...times) : null;
+// Which of the 5 slots "right now" belongs to — from that slot's own
+// start up to the NEXT slot's start (or midnight, for the last slot of
+// the day), null before 7:30am. Bounded per-slot windows, not a
+// fallback chain, same philosophy the old weight checkpoints used: this
+// picks the right slot for whatever time it actually is, independent of
+// exactly when the external scheduler happens to poll, rather than
+// risking a message landing late with a slot's stale copy attached.
+function currentCheckSlot(minutesSinceMidnight) {
+  for (let i = 0; i < CHECK_TIMES.length; i++) {
+    const start = CHECK_TIMES[i].minutes;
+    const end = i + 1 < CHECK_TIMES.length ? CHECK_TIMES[i + 1].minutes : 24 * 60;
+    if (minutesSinceMidnight >= start && minutesSinceMidnight < end) return CHECK_TIMES[i].key;
+  }
+  return null;
 }
 
 // ---------- Sending ----------
@@ -176,7 +163,7 @@ export default async function handler(req, res) {
   for (const [userId, subs] of Object.entries(byUser)) {
     results.checked++;
     const timeZone = subs[0].timezone || "UTC";
-    const { dateStr, hours, minutes, nowMs } = getLocalNow(timeZone);
+    const { dateStr, hours, minutes } = getLocalNow(timeZone);
     const minutesSinceMidnight = hours * 60 + minutes;
 
     const [{ data: profile }, { data: entry }, { data: sentToday }] = await Promise.all([
@@ -185,92 +172,67 @@ export default async function handler(req, res) {
       supabase.from("notification_log").select("category, last_sent_at").eq("user_id", userId).eq("date", dateStr),
     ]);
     const sentMap = Object.fromEntries((sentToday || []).map(r => [r.category, new Date(r.last_sent_at).getTime()]));
+    const slot = currentCheckSlot(minutesSinceMidnight);
 
-    // ---- Weight: two one-shot checkpoints, 4am and 10am local time ----
-    // Bounded windows (>= 4am AND < 10am, vs >= 10am), not a fallback
-    // chain — a fallback ("try 4am first, only fall back to 10am if
-    // already sent") meant a subscriber's very first-ever check of the
-    // day landing after 10am (new subscriber, or a gap in the scheduler)
-    // would get the "morning" message hours late instead of the
-    // "still haven't logged" one. Bounded windows pick the right message
-    // for whatever time it actually is, independent of send history.
-    const weightLogged = entry?.weight != null;
-    if (!weightLogged) {
-      if (minutesSinceMidnight >= 4 * 60 && minutesSinceMidnight < 10 * 60 && !sentMap.weight_4am) {
+    if (slot) {
+      // ---- Weight: was two one-shot messages at 4am/10am; now checks
+      // in at every shared slot until logged, same "stop once done"
+      // pattern water and food already used.
+      const weightLogged = entry?.weight != null;
+      if (!weightLogged && !sentMap[`weight_${slot}`]) {
         await sendToUser(supabase, subs, {
           title: "Weigh-in time",
           body: "Dude, log your weight.",
           url: "/?tab=weighin",
-        }, "weight_4am", userId, dateStr);
-        results.sent.push({ userId, category: "weight_4am" });
-      } else if (minutesSinceMidnight >= 10 * 60 && !sentMap.weight_10am) {
-        await sendToUser(supabase, subs, {
-          title: "Still no weigh-in",
-          body: "Dude, for real — log your weight.",
-          url: "/?tab=weighin",
-        }, "weight_10am", userId, dateStr);
-        results.sent.push({ userId, category: "weight_10am" });
+        }, `weight_${slot}`, userId, dateStr);
+        results.sent.push({ userId, category: `weight_${slot}` });
       }
-    }
 
-    // ---- Water: repeating every 2h, 9am-10pm, stops once the goal's hit ----
-    // Gated on a goal actually existing — previously "no goal set" meant
-    // waterGoalMet could never become true, so someone who's never
-    // configured a water goal would get nagged every 2 hours forever
-    // with no way to ever complete the day. No goal means nothing to
-    // measure progress against, so no reminder at all now, same as how
-    // food and weight naturally have nothing to check without their own
-    // reference points.
-    const waterGoalOz = profile?.water_goal_oz || 0;
-    const waterTotalOz = (entry?.water_logs || []).reduce((s, w) => s + (parseFloat(w.amountOz) || 0), 0);
-    const waterGoalMet = waterTotalOz >= waterGoalOz;
-    if (waterGoalOz > 0 && !waterGoalMet && minutesSinceMidnight >= 9 * 60 && minutesSinceMidnight <= 22 * 60) {
-      const windowStartMs = zonedTimeToUtcMs(dateStr, "09:00", timeZone);
-      const lastLogMs = getLastWaterLogMs(entry, dateStr, timeZone) ?? windowStartMs;
-      const lastSentMs = sentMap.water ?? 0;
-      const referenceMs = Math.max(lastLogMs, lastSentMs);
-      if (nowMs - referenceMs >= 2 * 60 * 60 * 1000) {
+      // ---- Water: stops once the goal's hit. Gated on a goal actually
+      // existing — someone who's never configured a water goal would
+      // otherwise get nagged every slot forever with no way to ever
+      // complete the day. No goal means nothing to measure progress
+      // against, so no reminder at all, same as food/weight naturally
+      // have nothing to check without their own reference points.
+      const waterGoalOz = profile?.water_goal_oz || 0;
+      const waterTotalOz = (entry?.water_logs || []).reduce((s, w) => s + (parseFloat(w.amountOz) || 0), 0);
+      const waterGoalMet = waterTotalOz >= waterGoalOz;
+      if (waterGoalOz > 0 && !waterGoalMet && !sentMap[`water_${slot}`]) {
         await sendToUser(supabase, subs, {
           title: "Water time",
           body: waterTotalOz > 0 ? `${Math.round(waterTotalOz)} oz down — keep sponging, dude.` : "Let's drink some water like a sponge, dude.",
           url: "/?tab=water",
-        }, "water", userId, dateStr);
-        results.sent.push({ userId, category: "water" });
+        }, `water_${slot}`, userId, dateStr);
+        results.sent.push({ userId, category: `water_${slot}` });
       }
-    }
 
-    // ---- Food: repeating every 4h, 9am-9pm, stops at EITHER goal ----
-    const calorieGoal = entry?.suggested_calories || 0;
-    const caloriesConsumed = entry?.calories_consumed || 0;
-    const calorieGoalMet = calorieGoal > 0 && caloriesConsumed >= calorieGoal;
-    // Only bother looking up the protein side if calories alone haven't
-    // already settled it — previously this ran on every single check for
-    // every user, including the common case where the calorie goal was
-    // already hit and the block was about to be skipped anyway.
-    let proteinGoalMet = false;
-    if (!calorieGoalMet) {
-      const { data: latestWeightRow } = await supabase
-        .from("entries").select("weight").eq("user_id", userId).not("weight", "is", null)
-        .order("date", { ascending: false }).limit(1).maybeSingle();
-      // Mirrors computeStats' formula in App.jsx (proteinG = weightLbs * 1.0)
-      // — deliberately not the full TDEE calculation, just this one trivial
-      // line, to avoid a second, driftable copy of the real logic.
-      const proteinGoal = (latestWeightRow?.weight || 0) * 1.0;
-      const proteinConsumed = entry?.protein || 0;
-      proteinGoalMet = proteinGoal > 0 && proteinConsumed >= proteinGoal;
-    }
-    if (!calorieGoalMet && !proteinGoalMet && minutesSinceMidnight >= 9 * 60 && minutesSinceMidnight <= 21 * 60) {
-      const windowStartMs = zonedTimeToUtcMs(dateStr, "09:00", timeZone);
-      const lastLogMs = getLastFoodLogMs(entry) ?? windowStartMs;
-      const lastSentMs = sentMap.food ?? 0;
-      const referenceMs = Math.max(lastLogMs, lastSentMs);
-      if (nowMs - referenceMs >= 4 * 60 * 60 * 1000) {
+      // ---- Food: stops at EITHER goal (calories or protein).
+      const calorieGoal = entry?.suggested_calories || 0;
+      const caloriesConsumed = entry?.calories_consumed || 0;
+      const calorieGoalMet = calorieGoal > 0 && caloriesConsumed >= calorieGoal;
+      // Only bother looking up the protein side if calories alone haven't
+      // already settled it — previously this ran on every single check for
+      // every user, including the common case where the calorie goal was
+      // already hit and the block was about to be skipped anyway.
+      let proteinGoalMet = false;
+      if (!calorieGoalMet) {
+        const { data: latestWeightRow } = await supabase
+          .from("entries").select("weight").eq("user_id", userId).not("weight", "is", null)
+          .order("date", { ascending: false }).limit(1).maybeSingle();
+        // Mirrors computeStats' formula in App.jsx (proteinG = weightLbs * 1.0)
+        // — deliberately not the full TDEE calculation, just this one trivial
+        // line, to avoid a second, driftable copy of the real logic.
+        const proteinGoal = (latestWeightRow?.weight || 0) * 1.0;
+        const proteinConsumed = entry?.protein || 0;
+        proteinGoalMet = proteinGoal > 0 && proteinConsumed >= proteinGoal;
+      }
+      if (!calorieGoalMet && !proteinGoalMet && !sentMap[`food_${slot}`]) {
         await sendToUser(supabase, subs, {
           title: "Food log check-in",
           body: caloriesConsumed > 0 ? "Been a few hours — anything since your last log?" : "Nothing logged yet today — worth a couple minutes.",
           url: "/?tab=food",
-        }, "food", userId, dateStr);
-        results.sent.push({ userId, category: "food" });
+        }, `food_${slot}`, userId, dateStr);
+        results.sent.push({ userId, category: `food_${slot}` });
       }
     }
   }
