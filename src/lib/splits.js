@@ -2,6 +2,15 @@
 // Shared split definitions, exercise database, and utility functions.
 // Used by LiftingSchedule.jsx (UI) and App.jsx (attendance grade).
 
+/* ── Reps-only exercises ──────────────────────────────────────────
+   Exercises tracked by rep count alone — no weight field, not even a
+   bodyweight-derived one. Dragon Flys is the first: it's loaded by
+   leverage (how far the legs extend), not a number worth typing in
+   every set. Exported so every place that touches a logged set —
+   SplitDashboard's logging UI, App.jsx's weekly comparison widget,
+   etc. — agrees on which exercises skip weight entirely. */
+export const REPS_ONLY_EXERCISES = new Set(["Dragon Flys"]);
+
 /* ── Seeded random ─────────────────────────────────────────────── */
 export function seededShuffle(arr, seed) {
   const a = [...arr];
@@ -116,6 +125,16 @@ export const ANATOMICAL_GROUPS = [
 // exercise counts toward directly, including whichever one it's
 // actually tagged with — spelled out explicitly here rather than
 // assumed, so this table reads correctly on its own.
+// Epley formula estimated 1RM — the standard, widely-used estimate for
+// "what could this person likely lift for 1 rep" from a set at any rep
+// range. A true 1-rep set needs no estimation at all (r===1 just
+// returns the weight lifted). Shared between SplitDashboard (PR
+// tracking, e1RM display) and the muscle-retention estimate in
+// Settings, so both read from the exact same formula rather than two
+// copies that could quietly drift apart.
+export function epley1RM(w, r) { return r === 1 ? w : Math.round(w * (1 + r / 30)); }
+export function sessionBest1RM(sets) { return (sets||[]).reduce((b,x) => { const v = epley1RM(parseFloat(x.weight)||0, parseInt(x.reps)||0); return v > b ? v : b; }, 0); }
+
 export const DUAL_DIRECT_CREDIT = {
   "Seated Cable Rows": ["Lats", "Rhomboids & Upper Back"],
 };

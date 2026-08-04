@@ -33,6 +33,7 @@ import {
   fetchUsers, loadProfile, loadEntries, loadWorkoutSessions, getUserSplitId, getUserSplitStartedOn,
   loadCustomDayPlans, saveCustomDayPlan, deleteCustomDayPlan,
   loadCustomSplitTemplates, saveCustomSplitTemplate, deleteCustomSplitTemplate,
+  loadWorkoutAttendance, markWorkoutAttendance, unmarkWorkoutAttendance,
 } from "../lib/storage";
 import { supabase } from "../lib/supabase";
 
@@ -52,6 +53,7 @@ export default function PartnerTraining({
   latestWeight, gender, dedicatedProgressiveOverload, onSplitChange, onExit,
   customDayPlans, onSaveCustomDayPlan, onDeleteCustomDayPlan,
   customSplitTemplates, onSaveCustomSplitTemplate, onDeleteCustomSplitTemplate,
+  workoutAttendance, onToggleWorkoutAttendance, onDirtyChange,
 }) {
   const [allUsers, setAllUsers] = useState([]);
   const [partnerId, setPartnerId] = useState(null);
@@ -59,6 +61,20 @@ export default function PartnerTraining({
   const [partnerData, setPartnerData] = useState(null); // { profile, latestWeight, userSplitId, splitStartedOn }
   const [loadingPartner, setLoadingPartner] = useState(false);
   const [realtimeStatus, setRealtimeStatus] = useState("connecting"); // connecting | live | offline
+  // Two independent SplitDashboard instances means two independent
+  // "has unsaved sets" signals — either one having unsaved data is
+  // reason enough to warn before navigating away, same guard the single-
+  // player screen already has (this was missing entirely in Partner
+  // Training before: neither instance was ever wired to it, so the
+  // nav-away confirm silently never fired here).
+  const [hostDirty, setHostDirty] = useState(false);
+  const [partnerDirty, setPartnerDirty] = useState(false);
+  useEffect(() => {
+    onDirtyChange?.(hostDirty || partnerDirty);
+  }, [hostDirty, partnerDirty, onDirtyChange]);
+  useEffect(() => {
+    return () => onDirtyChange?.(false); // this component owns that flag while mounted — clear it on the way out
+  }, [onDirtyChange]);
   // The host's current exercise queue, reported live by their
   // SplitDashboard instance via onBlocksChange — this is what "Follow my
   // partner" reads. Weight/reps are deliberately NOT included here, only
@@ -75,9 +91,9 @@ export default function PartnerTraining({
   async function choosePartner(u) {
     setLoadingPartner(true);
     try {
-      const [profile, entries, splitId, splitStart, sessions, dayPlans, splitTemplates] = await Promise.all([
+      const [profile, entries, splitId, splitStart, sessions, dayPlans, splitTemplates, attendance] = await Promise.all([
         loadProfile(u.id), loadEntries(u.id), getUserSplitId(u.id), getUserSplitStartedOn(u.id), loadWorkoutSessions(u.id),
-        loadCustomDayPlans(u.id), loadCustomSplitTemplates(u.id),
+        loadCustomDayPlans(u.id), loadCustomSplitTemplates(u.id), loadWorkoutAttendance(u.id),
       ]);
       const dates = Object.keys(entries).sort();
       const latest = dates[dates.length - 1];
@@ -89,6 +105,7 @@ export default function PartnerTraining({
         workoutSessions: sessions,
         customDayPlans: dayPlans,
         customSplitTemplates: splitTemplates,
+        workoutAttendance: attendance,
       });
       setPartnerName(u.name);
       setPartnerId(u.id);
@@ -101,6 +118,7 @@ export default function PartnerTraining({
     setPartnerId(null);
     setPartnerData(null);
     setPartnerName(null);
+    setPartnerDirty(false); // the instance that set this is going away
   }
 
   // Each side's workoutSessions is refetched independently rather than
@@ -146,6 +164,18 @@ export default function PartnerTraining({
   async function handlePartnerDeleteCustomSplitTemplate(id) {
     setPartnerData(prev => prev ? { ...prev, customSplitTemplates: (prev.customSplitTemplates || []).filter(t => t.id !== id) } : prev);
     await deleteCustomSplitTemplate(partnerId, id);
+  }
+  async function handlePartnerToggleWorkoutAttendance(date) {
+    const current = partnerData?.workoutAttendance || new Set();
+    const alreadyMarked = current.has(date);
+    setPartnerData(prev => {
+      if (!prev) return prev;
+      const next = new Set(prev.workoutAttendance || []);
+      if (alreadyMarked) next.delete(date); else next.add(date);
+      return { ...prev, workoutAttendance: next };
+    });
+    if (alreadyMarked) await unmarkWorkoutAttendance(partnerId, date);
+    else await markWorkoutAttendance(partnerId, date);
   }
 
   // Real-time sync — only active once a partner is actually chosen.
@@ -249,6 +279,7 @@ export default function PartnerTraining({
             subTab="trainDay"
             setTab={() => {}}
             onBlocksChange={setHostBlocks}
+            onDirtyChange={setHostDirty}
             dedicatedProgressiveOverload={dedicatedProgressiveOverload}
             customDayPlans={customDayPlans}
             onSaveCustomDayPlan={onSaveCustomDayPlan}
@@ -256,6 +287,8 @@ export default function PartnerTraining({
             customSplitTemplates={customSplitTemplates}
             onSaveCustomSplitTemplate={onSaveCustomSplitTemplate}
             onDeleteCustomSplitTemplate={onDeleteCustomSplitTemplate}
+            workoutAttendance={workoutAttendance}
+            onToggleWorkoutAttendance={onToggleWorkoutAttendance}
           />
         </div>
         <div>
@@ -275,6 +308,7 @@ export default function PartnerTraining({
               subTab="trainDay"
               setTab={() => {}}
               followSource={hostBlocks}
+              onDirtyChange={setPartnerDirty}
               dedicatedProgressiveOverload={partnerData.profile?.dedicatedProgressiveOverload}
               customDayPlans={partnerData.customDayPlans}
               onSaveCustomDayPlan={handlePartnerSaveCustomDayPlan}
@@ -282,6 +316,8 @@ export default function PartnerTraining({
               customSplitTemplates={partnerData.customSplitTemplates}
               onSaveCustomSplitTemplate={handlePartnerSaveCustomSplitTemplate}
               onDeleteCustomSplitTemplate={handlePartnerDeleteCustomSplitTemplate}
+              workoutAttendance={partnerData.workoutAttendance}
+              onToggleWorkoutAttendance={handlePartnerToggleWorkoutAttendance}
             />
           )}
         </div>

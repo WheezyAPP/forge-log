@@ -3,18 +3,19 @@ import {
   Dumbbell, ChevronDown, ChevronUp, CalendarDays, Target, Check, RotateCcw,
   Repeat, ExternalLink, X as XIcon, ChevronRight, ChevronLeft, ArrowLeft, History, Trophy,
   AlertTriangle, TrendingUp, Plus, Trash2, Moon, Zap, Lock, Users, Eye, Search, BookmarkPlus, List,
+  Copy, ClipboardPaste,
 } from "lucide-react";
 import {
   SPLITS, pickExercises, getFixedProgram, EX, WEAK_POINT_OPTIONS, WEAK_POINT_MAX_PICKS,
   buildWeakDayGroups, calcAttendanceGrade, getProgressionSuggestion, ANATOMICAL_GROUPS as OFF_SPLIT_GROUPS,
-  computeSetCoverage,
+  computeSetCoverage, sessionBest1RM, REPS_ONLY_EXERCISES,
 } from "../lib/splits";
 import {
   setUserSplitId, getUserWeakPointGroups, setUserWeakPointGroups,
   insertWorkoutSessions, deleteWorkoutSessionsForDate,
 } from "../lib/storage";
 import { EXERCISE_LINKS } from "../overload/exerciseLinks";
-import { toastError } from "../lib/toast";
+import { toastError, toastSuccess } from "../lib/toast";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -58,6 +59,16 @@ const GLUTE_HAM_BODYWEIGHT_EXERCISES = new Set([
 function gluteHamBodyweightPct(gender) {
   return gender === "female" ? 0.3 : 0.5;
 }
+
+// Single source of truth for "does this set count as filled/loggable" —
+// reps-only exercises only need a rep count; everything else still needs
+// both a weight and a rep count. Used both by the UI (which set rows
+// show a checkmark) and by the save gate (which sets actually get
+// persisted).
+function isValidSet(exerciseName, s) {
+  if (REPS_ONLY_EXERCISES.has(exerciseName)) return parseInt(s.r) > 0;
+  return parseFloat(s.w) > 0 && parseInt(s.r) > 0;
+}
 const C = {
   bg:"#1C1E26", surface:"#262933", raised:"#30343E",
   border:"#40465A", cream:"#F3F5F9", creamDim:"#9CA1B5", ember:"#4FADFF",
@@ -89,9 +100,7 @@ function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); retu
 function localDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
-function epley1RM(w, r) { return r === 1 ? w : Math.round(w * (1 + r / 30)); }
 function sessionVolume(sets) { return (sets||[]).reduce((s,x) => s + (parseFloat(x.weight)||0)*(parseFloat(x.reps)||0), 0); }
-function sessionBest1RM(sets) { return (sets||[]).reduce((b,x) => { const v = epley1RM(parseFloat(x.weight)||0, parseInt(x.reps)||0); return v > b ? v : b; }, 0); }
 // Consistent number formatting (no "172.40000001", comma-separated thousands
 // for volume totals) — same convention as the app-wide fmt() helper.
 function fmtN(n) {
@@ -106,7 +115,7 @@ function saveDismissed(userId, obj) {
   try { localStorage.setItem(`forge_dismissed_deloads_${userId}`, JSON.stringify(obj)); } catch {}
 }
 
-const PR_LABELS = { e1RM: "Est. 1RM", volume: "Volume", weight: "Top weight" };
+const PR_LABELS = { e1RM: "Est. 1RM", volume: "Volume", weight: "Top weight", reps: "Best set reps", totalReps: "Total reps" };
 
 function computePRFlags(sessions) {
   // Same-day duplicates need a real chronological tiebreak — id used to
@@ -116,6 +125,26 @@ function computePRFlags(sessions) {
   const sorted = [...sessions].sort((a,b) => a.date.localeCompare(b.date) || (a.createdAt || "").localeCompare(b.createdAt || "") || String(a.id).localeCompare(String(b.id)));
   const best = {}; const seen = new Set(); const flags = {};
   for (const s of sorted) {
+    const repsOnly = REPS_ONLY_EXERCISES.has(s.exercise);
+    if (repsOnly) {
+      // No weight to compare, so a "PR" here means either a single set
+      // with more reps than any set before it, or more total reps across
+      // the whole session than any prior session.
+      const filled = (s.sets||[]).filter(x => parseInt(x.reps) > 0);
+      if (!filled.length) { flags[s.id] = { isPR:false, prTypes:[] }; continue; }
+      const topReps = Math.max(...filled.map(x => parseInt(x.reps)||0));
+      const totalReps = filled.reduce((sum,x) => sum + (parseInt(x.reps)||0), 0);
+      const isFirst = !seen.has(s.exercise); seen.add(s.exercise);
+      const prev = best[s.exercise] || { topReps:0, totalReps:0 };
+      const types = [];
+      if (!isFirst) {
+        if (topReps > prev.topReps) types.push("reps");
+        if (totalReps > prev.totalReps) types.push("totalReps");
+      }
+      flags[s.id] = { isPR: types.length > 0, prTypes: types };
+      best[s.exercise] = { topReps: Math.max(prev.topReps, topReps), totalReps: Math.max(prev.totalReps, totalReps) };
+      continue;
+    }
     const filled = (s.sets||[]).filter(x => x.weight && x.reps);
     if (!filled.length) { flags[s.id] = { isPR:false, prTypes:[] }; continue; }
     const e1 = sessionBest1RM(filled), vol = sessionVolume(filled);
@@ -336,6 +365,38 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   }
   function updateDraft(dateKey, patch) {
     setPlanDrafts(prev => ({ ...prev, [dateKey]: { ...prev[dateKey], ...patch } }));
+  }
+  // Copy/paste one day's whole draft (rest flag, day name, exercise list)
+  // onto another — the whole point is skipping re-filling a day that's
+  // identical (or nearly identical) to one already built out. Clipboard
+  // lives outside planDrafts since it needs to survive being pasted onto
+  // more than one day, and deep-copies the exercises array on both copy
+  // and paste so two days can each be edited afterward without one
+  // day's edits silently mutating the other's (or the clipboard itself).
+  const [dayClipboard, setDayClipboard] = useState(null);
+  function copyDay(dateKey) {
+    const draft = planDrafts[dateKey];
+    if (!draft) return;
+    setDayClipboard({ dayType: draft.dayType, isRest: draft.isRest, exercises: draft.exercises.map(e => ({ ...e })) });
+    toastSuccess("Day copied — paste it onto any other day");
+  }
+  function pasteDay(dateKey) {
+    if (!dayClipboard) return;
+    updateDraft(dateKey, { dayType: dayClipboard.dayType, isRest: dayClipboard.isRest, exercises: dayClipboard.exercises.map(e => ({ ...e })) });
+    toastSuccess("Pasted");
+  }
+  // Reorder days without deleting and re-adding anything — each day
+  // card's identity is a real calendar date (today+i), fixed by its
+  // position in the list, so "moving" a day actually swaps its DRAFT
+  // CONTENT (rest flag, name, exercises) with whichever adjacent date's
+  // content is being displaced. Nothing is written to the database until
+  // Lock In runs, same as every other edit on this screen.
+  function moveDay(index, direction) {
+    const otherIndex = index + direction;
+    if (otherIndex < 0 || otherIndex >= planLength) return;
+    const dateKey = localDateStr(addDays(today, index));
+    const otherKey = localDateStr(addDays(today, otherIndex));
+    setPlanDrafts(prev => ({ ...prev, [dateKey]: prev[otherKey], [otherKey]: prev[dateKey] }));
   }
   function addDraftExercise(dateKey, ex) {
     setPlanDrafts(prev => {
@@ -649,7 +710,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     // EMPTY blocks array (every exercise removed on purpose, to clear a
     // day) is still let through below — only "blocks exist but are all
     // invalid" is blocked.
-    const hasAnyValidSet = blocks.some(b => b.exercise && b.sets.some(s => parseFloat(s.w) > 0 && parseInt(s.r) > 0));
+    const hasAnyValidSet = blocks.some(b => b.exercise && b.sets.some(s => isValidSet(b.exercise, s)));
     if (blocks.length > 0 && !hasAnyValidSet) {
       toastError("Add a weight and reps to at least one set before saving.");
       return;
@@ -680,11 +741,17 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     await deleteWorkoutSessionsForDate(userId, dateKey, userSplitId);
 
     const toInsert = blocks
-      .filter(b => b.exercise && b.sets.some(s => parseFloat(s.w) > 0 && parseInt(s.r) > 0))
+      .filter(b => b.exercise && b.sets.some(s => isValidSet(b.exercise, s)))
       .map(b => ({
         date: dateKey, exercise: b.exercise, group: b.grp,
-        sets: b.sets.filter(s => parseFloat(s.w) > 0 && parseInt(s.r) > 0).map(s => {
-          const set = { weight: parseFloat(s.w), reps: parseInt(s.r) };
+        sets: b.sets.filter(s => isValidSet(b.exercise, s)).map(s => {
+          // Reps-only exercises never had a real weight typed in — leave
+          // the field off entirely rather than storing a fake 0, so
+          // downstream "no weight logged" checks (PRs, e1RM, avg weight)
+          // can tell "genuinely no weight" apart from "typed a 0".
+          const set = REPS_ONLY_EXERCISES.has(b.exercise)
+            ? { reps: parseInt(s.r) }
+            : { weight: parseFloat(s.w), reps: parseInt(s.r) };
           // Only attached when actually filled in — an absent rpe (vs. a
           // stored null/0) is what lets getProgressionSuggestion tell
           // "never had this feature on" apart from "logged it and RPE
@@ -747,9 +814,14 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     return Object.entries(map).map(([ex, sessions]) => {
       const sorted = [...sessions].sort((a,b) => a.date.localeCompare(b.date) || (a.createdAt || "").localeCompare(b.createdAt || ""));
       const last = sorted[sorted.length-1];
-      const best = Math.max(...sorted.map(s => sessionBest1RM(s.sets)));
-      const totalVolume = sorted.reduce((sum, s) => sum + sessionVolume(s.sets), 0);
-      return { exercise: ex, grp: last.group, sessions: sorted, lastDate: last.date, best, totalVolume };
+      const repsOnly = REPS_ONLY_EXERCISES.has(ex);
+      // Reps-only exercises never had weight logged, so e1RM/volume are
+      // meaningless (always 0) — track best single-set reps instead, the
+      // reps-only equivalent of "best e1RM."
+      const best = repsOnly ? 0 : Math.max(...sorted.map(s => sessionBest1RM(s.sets)));
+      const totalVolume = repsOnly ? 0 : sorted.reduce((sum, s) => sum + sessionVolume(s.sets), 0);
+      const bestReps = repsOnly ? Math.max(0, ...sorted.flatMap(s => (s.sets||[]).map(x => parseInt(x.reps)||0))) : null;
+      return { exercise: ex, grp: last.group, sessions: sorted, lastDate: last.date, best, totalVolume, repsOnly, bestReps };
     }).sort((a,b) => b.lastDate.localeCompare(a.lastDate));
   }, [workoutSessions]);
 
@@ -1061,7 +1133,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   if (view === "day") {
     const day = next3[dayOffset];
     const totalVol = blocks.reduce((s,b) => s + sessionVolume(b.sets.map(x => ({ weight:x.w, reps:x.r }))), 0);
-    const completed = blocks.filter(b => b.sets.some(s => s.w && s.r)).length;
+    const completed = blocks.filter(b => b.sets.some(s => isValidSet(b.exercise, s))).length;
     const ac = day?.def?.color || C.ember;
     return (
       <div key="view-day" className="ft-row-enter">
@@ -1190,9 +1262,26 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                     : "Log your weight in Daily Log so this can add the bodyweight portion automatically."}
                 </div>
               )}
+              {REPS_ONLY_EXERCISES.has(b.exercise) && (
+                <div style={{ fontSize:10, color:C.creamDim, marginBottom:8 }}>
+                  Reps only — no weight to log for this one, just track how many you get per set.
+                </div>
+              )}
               {b.sets.map((s, si) => {
-                const filled = s.w && s.r;
+                const filled = isValidSet(b.exercise, s);
                 const target = b.sugg?.targetReps || b.repTarget;
+                if (REPS_ONLY_EXERCISES.has(b.exercise)) {
+                  return (
+                    <div key={si} style={{ display:"grid", gridTemplateColumns: dedicatedProgressiveOverload ? "20px 1fr 44px 24px" : "20px 1fr 24px", gap:6, marginBottom:5, alignItems:"center" }}>
+                      <div style={{ fontSize:11, color: filled ? C.lime : C.creamDim, textAlign:"center" }}>{filled ? <Check size={12}/> : si+1}</div>
+                      <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
+                      {dedicatedProgressiveOverload && (
+                        <input className="ft-input" type="number" inputMode="decimal" min="1" max="10" step="0.5" onFocus={e=>e.target.select()} title="RPE (1-10)" placeholder="RPE" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                      )}
+                      <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
+                    </div>
+                  );
+                }
                 if (isAssistedBodyweight(b.exercise)) {
                   const key = `${bi}-${si}`;
                   const assistVal = assistInputs[key] ?? "";
@@ -1488,7 +1577,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         </div>
       )}
 
-      {Array.from({ length:planLength }, (_, i) => addDays(today, i)).map(date => {
+      {Array.from({ length:planLength }, (_, i) => addDays(today, i)).map((date, i) => {
         const dateKey = localDateStr(date);
         const draft = planDrafts[dateKey];
         const search = planSearch[dateKey] || "";
@@ -1498,12 +1587,20 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
 
         return (
           <div key={dateKey} className="ft-card" style={{ padding:14, marginBottom:10 }}>
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, gap:8, flexWrap:"wrap" }}>
               <div style={{ fontWeight:700, fontSize:13 }}>{fmtDay(date)}</div>
-              <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:C.creamDim, cursor:"pointer" }}>
-                <input type="checkbox" checked={draft.isRest} onChange={e => updateDraft(dateKey, { isRest: e.target.checked })} />
-                Rest day
-              </label>
+              <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+                <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:C.creamDim, cursor:"pointer" }}>
+                  <input type="checkbox" checked={draft.isRest} onChange={e => updateDraft(dateKey, { isRest: e.target.checked })} />
+                  Rest day
+                </label>
+                <div style={{ display:"flex", alignItems:"center", gap:2 }}>
+                  <button className="ft-btn ft-btn-ghost" style={{ padding:"4px 6px" }} title="Copy this day" onClick={() => copyDay(dateKey)}><Copy size={12}/></button>
+                  <button className="ft-btn ft-btn-ghost" style={{ padding:"4px 6px", opacity: dayClipboard ? 1 : 0.4, cursor: dayClipboard ? "pointer" : "not-allowed" }} title={dayClipboard ? "Paste copied day here" : "Copy a day first"} disabled={!dayClipboard} onClick={() => pasteDay(dateKey)}><ClipboardPaste size={12}/></button>
+                  <button className="ft-btn ft-btn-ghost" style={{ padding:"4px 6px", opacity: i === 0 ? 0.4 : 1, cursor: i === 0 ? "not-allowed" : "pointer" }} title="Move day up" disabled={i === 0} onClick={() => moveDay(i, -1)}><ChevronUp size={12}/></button>
+                  <button className="ft-btn ft-btn-ghost" style={{ padding:"4px 6px", opacity: i === planLength - 1 ? 0.4 : 1, cursor: i === planLength - 1 ? "not-allowed" : "pointer" }} title="Move day down" disabled={i === planLength - 1} onClick={() => moveDay(i, 1)}><ChevronDown size={12}/></button>
+                </div>
+              </div>
             </div>
 
             {!draft.isRest && (
@@ -1700,11 +1797,20 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
             <div>
               <div style={{ fontSize:14, fontWeight:700 }}>{h.exercise}</div>
               <div style={{ fontSize:11, color:C.creamDim }}>{h.grp} · {h.sessions.length} session{h.sessions.length!==1?"s":""} · last {h.lastDate}</div>
-              <div className="ft-mono" style={{ fontSize:11, color:C.creamDim, marginTop:2 }}>{fmtN(h.totalVolume)} lbs total volume</div>
+              {!h.repsOnly && <div className="ft-mono" style={{ fontSize:11, color:C.creamDim, marginTop:2 }}>{fmtN(h.totalVolume)} lbs total volume</div>}
             </div>
             <div style={{ textAlign:"right" }}>
-              <div style={{ fontSize:9, color:C.creamDim }}>best e1RM</div>
-              <div style={{ fontSize:14, fontWeight:700, color:C.ember }}>{fmtN(h.best)} lbs</div>
+              {h.repsOnly ? (
+                <>
+                  <div style={{ fontSize:9, color:C.creamDim }}>best set</div>
+                  <div style={{ fontSize:14, fontWeight:700, color:C.ember }}>{fmtN(h.bestReps)} reps</div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize:9, color:C.creamDim }}>best e1RM</div>
+                  <div style={{ fontSize:14, fontWeight:700, color:C.ember }}>{fmtN(h.best)} lbs</div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -1715,8 +1821,13 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   if (view === "lift") {
     const h = historyByExercise.find(x => x.exercise === selectedLift);
     if (!h) { setView("history"); return null; }
-    const chartData = h.sessions.map(s => ({ date: s.date.slice(5), e1rm: sessionBest1RM(s.sets), volume: sessionVolume(s.sets) }));
+    const repsOnly = h.repsOnly;
+    const chartData = h.sessions.map(s => ({
+      date: s.date.slice(5), e1rm: sessionBest1RM(s.sets), volume: sessionVolume(s.sets),
+      bestReps: Math.max(0, ...(s.sets||[]).map(x => parseInt(x.reps)||0)),
+    }));
     const avgW = Math.round(h.sessions.reduce((s,x) => s + (x.sets[0]?.weight||0), 0) / h.sessions.length);
+    const avgReps = Math.round(h.sessions.reduce((s,x) => s + (Math.max(0, ...(x.sets||[]).map(y => parseInt(y.reps)||0))), 0) / h.sessions.length);
     // Only counted across sets that actually have an RPE logged — most
     // exercises won't, if Dedicated Progressive Overload has never been
     // on, and this stat just quietly doesn't appear for those rather
@@ -1729,40 +1840,69 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         <div style={{ fontSize:16, fontWeight:700 }}>{h.exercise}</div>
         <div style={{ fontSize:11, color:C.ember, marginBottom:12 }}>{h.grp}</div>
         <div style={{ display:"grid", gridTemplateColumns: avgRpe != null ? "repeat(4,1fr)" : "repeat(3,1fr)", gap:8, marginBottom:14 }}>
-          <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Best e1RM</div><div style={{ fontSize:16, fontWeight:800, color:C.ember }}>{fmtN(h.best)} lbs</div></div>
-          <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Avg weight</div><div style={{ fontSize:16, fontWeight:800 }}>{fmtN(avgW)} lbs</div></div>
-          <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Sessions</div><div style={{ fontSize:16, fontWeight:800 }}>{h.sessions.length}</div></div>
+          {repsOnly ? (
+            <>
+              <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Best set</div><div style={{ fontSize:16, fontWeight:800, color:C.ember }}>{fmtN(h.bestReps)} reps</div></div>
+              <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Avg best set</div><div style={{ fontSize:16, fontWeight:800 }}>{fmtN(avgReps)} reps</div></div>
+              <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Sessions</div><div style={{ fontSize:16, fontWeight:800 }}>{h.sessions.length}</div></div>
+            </>
+          ) : (
+            <>
+              <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Best e1RM</div><div style={{ fontSize:16, fontWeight:800, color:C.ember }}>{fmtN(h.best)} lbs</div></div>
+              <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Avg weight</div><div style={{ fontSize:16, fontWeight:800 }}>{fmtN(avgW)} lbs</div></div>
+              <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Sessions</div><div style={{ fontSize:16, fontWeight:800 }}>{h.sessions.length}</div></div>
+            </>
+          )}
           {avgRpe != null && (
             <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Avg RPE</div><div style={{ fontSize:16, fontWeight:800, color: avgRpe >= 9 ? C.warn : C.cream }}>{avgRpe}</div></div>
           )}
         </div>
-        {chartData.length > 1 && (
-          <div className="ft-card" style={{ padding:14, marginBottom:12 }}>
-            <div style={{ fontSize:11, color:C.creamDim, marginBottom:6 }}>Estimated 1RM over time</div>
-            <ResponsiveContainer width="100%" height={180}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                <XAxis dataKey="date" stroke={C.creamDim} fontSize={10} />
-                <YAxis stroke={C.creamDim} fontSize={10} domain={["auto","auto"]} />
-                <Tooltip contentStyle={{ background:C.raised, border:`1px solid ${C.border}`, color:C.cream }} />
-                <Line type="monotone" dataKey="e1rm" stroke={C.ember} strokeWidth={2} dot={{ r:3 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-        {chartData.length > 1 && (
-          <div className="ft-card" style={{ padding:14, marginBottom:12 }}>
-            <div style={{ fontSize:11, color:C.creamDim, marginBottom:6 }}>Session volume (sets × reps × weight)</div>
-            <ResponsiveContainer width="100%" height={160}>
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                <XAxis dataKey="date" stroke={C.creamDim} fontSize={10} />
-                <YAxis stroke={C.creamDim} fontSize={10} />
-                <Tooltip contentStyle={{ background:C.raised, border:`1px solid ${C.border}`, color:C.cream }} />
-                <Bar dataKey="volume" fill={C.ember} radius={[4,4,4,4]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+        {repsOnly ? (
+          chartData.length > 1 && (
+            <div className="ft-card" style={{ padding:14, marginBottom:12 }}>
+              <div style={{ fontSize:11, color:C.creamDim, marginBottom:6 }}>Best set (reps) over time</div>
+              <ResponsiveContainer width="100%" height={180}>
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis dataKey="date" stroke={C.creamDim} fontSize={10} />
+                  <YAxis stroke={C.creamDim} fontSize={10} domain={["auto","auto"]} />
+                  <Tooltip contentStyle={{ background:C.raised, border:`1px solid ${C.border}`, color:C.cream }} />
+                  <Line type="monotone" dataKey="bestReps" stroke={C.ember} strokeWidth={2} dot={{ r:3 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )
+        ) : (
+          <>
+            {chartData.length > 1 && (
+              <div className="ft-card" style={{ padding:14, marginBottom:12 }}>
+                <div style={{ fontSize:11, color:C.creamDim, marginBottom:6 }}>Estimated 1RM over time</div>
+                <ResponsiveContainer width="100%" height={180}>
+                  <LineChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                    <XAxis dataKey="date" stroke={C.creamDim} fontSize={10} />
+                    <YAxis stroke={C.creamDim} fontSize={10} domain={["auto","auto"]} />
+                    <Tooltip contentStyle={{ background:C.raised, border:`1px solid ${C.border}`, color:C.cream }} />
+                    <Line type="monotone" dataKey="e1rm" stroke={C.ember} strokeWidth={2} dot={{ r:3 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+            {chartData.length > 1 && (
+              <div className="ft-card" style={{ padding:14, marginBottom:12 }}>
+                <div style={{ fontSize:11, color:C.creamDim, marginBottom:6 }}>Session volume (sets × reps × weight)</div>
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                    <XAxis dataKey="date" stroke={C.creamDim} fontSize={10} />
+                    <YAxis stroke={C.creamDim} fontSize={10} />
+                    <Tooltip contentStyle={{ background:C.raised, border:`1px solid ${C.border}`, color:C.cream }} />
+                    <Bar dataKey="volume" fill={C.ember} radius={[4,4,4,4]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </>
         )}
         <div className="ft-card" style={{ padding:"10px 14px" }}>
           <div style={{ fontSize:10, color:C.creamDim, marginBottom:6 }}>Every set logged, most recent first.</div>
@@ -1770,13 +1910,15 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
             const pr = prFlags[s.id];
             const vol = sessionVolume(s.sets);
             const best = sessionBest1RM(s.sets);
+            const sessionBestReps = Math.max(0, ...(s.sets||[]).map(x => parseInt(x.reps)||0));
             return (
               <div key={s.id} style={{ padding:"9px 0", borderBottom:`1px solid ${C.border}` }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
                   <span style={{ color:C.creamDim, fontSize:12, display:"flex", alignItems:"center", gap:5 }}>{s.date}{pr?.isPR && <Trophy size={12} color={C.lime}/>}</span>
                   <span className="ft-mono" style={{ fontSize:11, color:C.creamDim }}>
-                    vol: <span style={{ color:C.ember }}>{fmtN(vol)} lbs</span>
-                    {" · "}e1RM: <span style={{ color:C.ember }}>{fmtN(best)} lbs</span>
+                    {repsOnly
+                      ? <>best set: <span style={{ color:C.ember }}>{sessionBestReps} reps</span></>
+                      : <>vol: <span style={{ color:C.ember }}>{fmtN(vol)} lbs</span>{" · "}e1RM: <span style={{ color:C.ember }}>{fmtN(best)} lbs</span></>}
                   </span>
                 </div>
                 <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
@@ -1786,7 +1928,9 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                       className="ft-mono"
                       style={{ fontSize:11, padding:"3px 8px", borderRadius:999, background:C.raised, border:`1px solid ${C.border}`, color:C.cream }}
                     >
-                      {fmtN(parseFloat(set.weight) || 0)} lbs × {parseInt(set.reps) || 0} reps{set.rpe != null && set.rpe > 0 ? ` @ RPE ${set.rpe}` : ""}
+                      {repsOnly
+                        ? `${parseInt(set.reps) || 0} reps${set.rpe != null && set.rpe > 0 ? ` @ RPE ${set.rpe}` : ""}`
+                        : `${fmtN(parseFloat(set.weight) || 0)} lbs × ${parseInt(set.reps) || 0} reps${set.rpe != null && set.rpe > 0 ? ` @ RPE ${set.rpe}` : ""}`}
                     </span>
                   ))}
                 </div>

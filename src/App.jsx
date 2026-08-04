@@ -56,7 +56,7 @@ import SplitDashboard from "./components/SplitDashboard";
 import PartnerTraining from "./components/PartnerTraining";
 import FoodSearch from "./components/FoodSearch";
 import ToastStack from "./components/ToastStack";
-import { calcAttendanceGrade, calcRawAttendanceGrade, getProgressionSuggestion, SPLITS, ANATOMICAL_GROUPS, computeSetCoverage, computeSetCoverageDetailed } from "./lib/splits";
+import { calcAttendanceGrade, calcRawAttendanceGrade, getProgressionSuggestion, SPLITS, ANATOMICAL_GROUPS, computeSetCoverage, computeSetCoverageDetailed, sessionBest1RM, REPS_ONLY_EXERCISES } from "./lib/splits";
 import {
   loadProfile,
   saveProfile,
@@ -546,6 +546,113 @@ function estimateGoalDate(entries, profile, goalWeightLbs, latestWeight, asOfDat
     recentLoggingGaps, recentLoggedCount,
     calorieShiftNote,
   };
+}
+
+// Muscle-retention confidence for an active mini-cut — a heuristic
+// ESTIMATE combining four real, independently-checkable signals, not a
+// body composition measurement (no scan/DEXA data exists to measure
+// this directly). Weighted so the most DIRECT evidence — actual
+// strength trend — counts for the most, when there's enough training
+// history to compute it at all; the other three are risk-factor
+// proxies, not direct outcomes, so they're weighted lower, and
+// strength's weight gets redistributed to them (not silently treated
+// as a zero) when there isn't enough lift history yet.
+//
+// Thresholds below are drawn from commonly-cited ranges in cutting
+// guidance, not invented: ~0.5-1% bodyweight/week is the generally-
+// cited ceiling for minimizing muscle loss while cutting; ~0.7-1g
+// protein per lb bodyweight is the generally-cited adequate range;
+// holding or improving e1RM on trained lifts during a deficit is
+// itself one of the most direct real-world signals available that
+// muscle is being preserved, not lost.
+function computeMuscleRetentionConfidence(entries, workoutSessions, profile, latestWeight) {
+  if (profile?.goalType !== "mini_cut" || !profile.miniCutStartedOn || !latestWeight) return null;
+  const cutStartStr = profile.miniCutStartedOn;
+  const todayStrNow = todayStr();
+
+  const adaptive = computeAdaptiveTDEE(entries, profile.goalType);
+
+  // ---- Rate of loss, as % of bodyweight per week ----
+  let rateFactor = null;
+  if (adaptive.ready) {
+    const ratePctPerWeek = Math.abs(adaptive.weightChangeLbsPerWeek) / latestWeight * 100;
+    let score;
+    if (ratePctPerWeek <= 0.7) score = 100;
+    else if (ratePctPerWeek <= 1.0) score = 100 - (ratePctPerWeek - 0.7) / 0.3 * 30;
+    else if (ratePctPerWeek <= 1.5) score = 70 - (ratePctPerWeek - 1.0) / 0.5 * 30;
+    else score = Math.max(15, 40 - (ratePctPerWeek - 1.5) * 20);
+    rateFactor = { score: Math.round(score), detail: `${ratePctPerWeek.toFixed(2)}% bodyweight/week` };
+  }
+
+  // ---- Protein intake since the cut started, per lb bodyweight ----
+  let proteinFactor = null;
+  const proteinDays = Object.entries(entries)
+    .filter(([d, e]) => d >= cutStartStr && e.protein > 0 && e.weight != null)
+    .map(([, e]) => ({ protein: e.protein, weight: e.weight }));
+  if (proteinDays.length >= 3) {
+    const avgProtein = proteinDays.reduce((s, d) => s + d.protein, 0) / proteinDays.length;
+    const avgWeight = proteinDays.reduce((s, d) => s + d.weight, 0) / proteinDays.length;
+    const proteinPerLb = avgProtein / avgWeight;
+    let score;
+    if (proteinPerLb >= 1.0) score = 100;
+    else if (proteinPerLb >= 0.8) score = 75 + (proteinPerLb - 0.8) / 0.2 * 25;
+    else if (proteinPerLb >= 0.6) score = 45 + (proteinPerLb - 0.6) / 0.2 * 30;
+    else score = Math.max(20, proteinPerLb / 0.6 * 45);
+    proteinFactor = { score: Math.round(score), detail: `${fmt(avgProtein)}g/day avg, ${proteinPerLb.toFixed(2)}g/lb` };
+  }
+
+  // ---- Strength trend: best e1RM per exercise, early vs. recent third of the cut ----
+  let strengthFactor = null;
+  const cutSessions = (workoutSessions || []).filter(s => s.date >= cutStartStr && s.date <= todayStrNow);
+  if (cutSessions.length > 0) {
+    const cutStart = new Date(cutStartStr + "T00:00:00");
+    const daysElapsed = Math.max(1, Math.round((new Date(todayStrNow + "T00:00:00") - cutStart) / 86400000));
+    const thirdMs = (daysElapsed / 3) * 86400000;
+    const earlyEndStr = localDateStr(new Date(cutStart.getTime() + thirdMs));
+    const lateStartStr = localDateStr(new Date(cutStart.getTime() + thirdMs * 2));
+    const byExercise = {};
+    for (const s of cutSessions) (byExercise[s.exercise] ||= []).push(s);
+    const ratios = [];
+    for (const sessions of Object.values(byExercise)) {
+      const early = sessions.filter(s => s.date <= earlyEndStr);
+      const late = sessions.filter(s => s.date >= lateStartStr);
+      if (!early.length || !late.length) continue;
+      const earlyBest = Math.max(...early.map(s => sessionBest1RM(s.sets)));
+      const lateBest = Math.max(...late.map(s => sessionBest1RM(s.sets)));
+      if (earlyBest > 0) ratios.push(lateBest / earlyBest);
+    }
+    if (ratios.length > 0) {
+      const avgRatio = ratios.reduce((a, b) => a + b, 0) / ratios.length;
+      let score;
+      if (avgRatio >= 1.0) score = 100;
+      else if (avgRatio >= 0.95) score = 75 + (avgRatio - 0.95) / 0.05 * 25;
+      else if (avgRatio >= 0.90) score = 45 + (avgRatio - 0.90) / 0.05 * 30;
+      else score = Math.max(20, avgRatio / 0.90 * 45);
+      strengthFactor = { score: Math.round(score), detail: `${ratios.length} lift${ratios.length !== 1 ? "s" : ""} tracked, avg ${(avgRatio * 100).toFixed(0)}% of early e1RM`, exerciseCount: ratios.length };
+    }
+  }
+
+  // ---- Training consistency: sessions/week since the cut started ----
+  const cutDaysWithSessions = new Set(cutSessions.map(s => s.date));
+  const weeksElapsed = Math.max(1, (new Date(todayStrNow + "T00:00:00") - new Date(cutStartStr + "T00:00:00")) / (7 * 86400000));
+  const sessionsPerWeek = cutDaysWithSessions.size / weeksElapsed;
+  let consistencyScore;
+  if (sessionsPerWeek >= 3) consistencyScore = 100;
+  else if (sessionsPerWeek >= 2) consistencyScore = 60 + (sessionsPerWeek - 2) * 40;
+  else consistencyScore = Math.max(25, sessionsPerWeek / 2 * 60);
+  const consistencyFactor = { score: Math.round(consistencyScore), detail: `${sessionsPerWeek.toFixed(1)} sessions/week` };
+
+  // ---- Combine — redistributing weight away from any unavailable factor ----
+  const weights = { rate: 0.25, protein: 0.25, strength: 0.35, consistency: 0.15 };
+  const factors = { rate: rateFactor, protein: proteinFactor, strength: strengthFactor, consistency: consistencyFactor };
+  let totalWeight = 0, weightedSum = 0;
+  for (const [key, factor] of Object.entries(factors)) {
+    if (factor == null) continue;
+    weightedSum += factor.score * weights[key];
+    totalWeight += weights[key];
+  }
+  if (totalWeight === 0) return null;
+  return { score: Math.round(weightedSum / totalWeight), factors };
 }
 
 // Creatine monohydrate reaches steady-state muscle saturation after
@@ -1545,7 +1652,10 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   }
 
   async function handleSave() {
-    if (!weightInput || !caloriesInput) return;
+    if (!weightInput || !caloriesInput) {
+      toastError(`Enter your ${!weightInput && !caloriesInput ? "weight and calories" : !weightInput ? "weight" : "calories"} before saving.`);
+      return;
+    }
     const weight = clampPositive(weightInput);
     const stats = computeStats(profile, weight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist") });
     const merged = await mergeAndSaveEntry(selectedDate, {
@@ -1560,6 +1670,21 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       suggestedCalories: stats.suggestedCalories,
     });
     maybeAutoUpdateAdaptiveTdee({ ...entriesRef.current, [selectedDate]: merged });
+  }
+
+  // Saves creatine the instant the checkbox is tapped, independent of
+  // handleSave's weight+calories gate above — that gate was the actual
+  // bug: checking "took my 5g today" on a day without weight/calories
+  // already entered would silently save nothing at all, since the whole
+  // handleSave call just no-ops before it ever reaches the creatine
+  // field. A checkbox reads as a complete, standalone action the same
+  // way water/weigh-in quick-logs already are, so it should behave like
+  // one instead of quietly depending on an unrelated form being filled
+  // out first.
+  async function handleToggleCreatine(checked) {
+    const value = checked ? "5" : "";
+    setCreatineInput(value);
+    await mergeAndSaveEntry(selectedDate, { creatine: clampPositive(value) });
   }
 
   async function handleDelete(date) {
@@ -1804,6 +1929,28 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
     g.children ? g.children.some((c) => c.key === tab) : g.key === tab
   ) || visibleNavGroups[0];
 
+  // Measures the floating nav's ACTUAL rendered height instead of
+  // guessing a fixed pixel value per tab — the previous 100px/148px
+  // split only ever accounted for whether a sub-nav row was present,
+  // not real-world variation in text wrapping, font rendering, icon
+  // sizing, or safe-area insets across devices. A ResizeObserver keeps
+  // this correct automatically whenever the nav's actual size changes,
+  // rather than needing another hand-tuned magic number the next time
+  // something doesn't quite fit. +24px margin above the raw measurement
+  // so content never sits flush against the pill's edge.
+  const navRef = useRef(null);
+  const [navClearance, setNavClearance] = useState(148);
+  useEffect(() => {
+    const el = navRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const height = entries[0]?.contentRect?.height;
+      if (height) setNavClearance(Math.ceil(height) + 24);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   if (!loaded) {
     return (
       <div className="ft-app" style={{ padding: 20 }}>
@@ -1827,17 +1974,14 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
         paddingBottom: "var(--ft-nav-clearance)",
         borderRadius: 18,
         // Reserves enough room at the bottom for the floating nav so the
-        // last bit of scrollable content never sits behind it. The old
-        // fixed 100px only ever covered the primary pill row — most tabs
-        // (anything with sub-tabs: Log, Check-Ins, Strength Training)
-        // also show a second row above it, which the fixed value never
-        // accounted for, so the nav ended up overlapping the last item
-        // or two of whatever list was open. Same condition the sub-nav
-        // row itself renders on below, so the two can't disagree. Used
-        // for both this base padding-bottom and the mobile media-query
-        // override in GlobalStyle, so there's one source of truth
-        // instead of the two ever drifting apart again.
-        "--ft-nav-clearance": activeGroup.children ? "148px" : "100px",
+        // last bit of scrollable content never sits behind it — driven
+        // by navClearance (see the ResizeObserver above), which measures
+        // the nav's REAL rendered height instead of guessing a fixed
+        // pixel value per tab. Used for both this base padding-bottom
+        // and the mobile media-query override in GlobalStyle, so
+        // there's one source of truth instead of the two ever drifting
+        // apart again.
+        "--ft-nav-clearance": `${navClearance}px`,
       }}
     >
       {/* Header */}
@@ -1920,7 +2064,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       {/* Bottom nav — floating pill, replacing the old top tab row.
           Gold is scoped to only this element (see .ft-nav-primary in
           GlobalStyle) — nowhere else in the app uses it. */}
-      <div className="ft-nav">
+      <div className="ft-nav" ref={navRef}>
         {activeGroup.children && (
           <div className="ft-nav-sub">
             {activeGroup.children.map((child) => (
@@ -2110,6 +2254,9 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
           customSplitTemplates={customSplitTemplates}
           onSaveCustomSplitTemplate={handleSaveCustomSplitTemplate}
           onDeleteCustomSplitTemplate={handleDeleteCustomSplitTemplate}
+          workoutAttendance={workoutAttendance}
+          onToggleWorkoutAttendance={handleToggleWorkoutAttendance}
+          onDirtyChange={setHasUnsavedWorkout}
         />
       )}
 
@@ -2119,7 +2266,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
       {tab === "trends" && <Trends chartData={chartData} workoutSessions={workoutSessions} showLifts={features.train} showWater={features.water} profile={profile} />}
 
-      {tab === "settings" && <SettingsPanel profile={profile} onChange={handleProfileChange} latestWeight={latestEntry?.weight ?? null} features={features} onToggleFeature={handleToggleFeature} entries={entries} onImportCsv={handleImportCsv} userId={userId} />}
+      {tab === "settings" && <SettingsPanel profile={profile} onChange={handleProfileChange} latestWeight={latestEntry?.weight ?? null} features={features} onToggleFeature={handleToggleFeature} entries={entries} onImportCsv={handleImportCsv} userId={userId} workoutSessions={workoutSessions} />}
       </div>
     </div>
 
@@ -3004,7 +3151,7 @@ function LogEntry(props) {
               <input
                 type="checkbox"
                 checked={parseFloat(creatineInput) > 0}
-                onChange={(e) => setCreatineInput(e.target.checked ? "5" : "")}
+                onChange={(e) => handleToggleCreatine(e.target.checked)}
                 style={{ width: 18, height: 18, accentColor: COLORS.ember, cursor: "pointer" }}
               />
               <span style={{ fontSize: 13.5, color: COLORS.cream }}>Took my 5g today</span>
@@ -4228,16 +4375,26 @@ function buildWeeklyLiftComparisons(workoutSessions) {
     const lastBest = bestSet(lastWeek);
     if (!thisBest || !lastBest) return;
 
-    const weightDelta = thisBest.weight - lastBest.weight;
+    const repsOnly = REPS_ONLY_EXERCISES.has(exercise);
     const repsDelta = thisBest.reps - lastBest.reps;
     let kind, badge;
-    if (weightDelta > 0 && repsDelta >= 0) { kind = "pr"; badge = `PR · +${fmt(weightDelta)} lbs`; }
-    else if (weightDelta > 0) { kind = "up"; badge = `+${fmt(weightDelta)} lbs`; }
-    else if (weightDelta === 0 && repsDelta > 0) { kind = "up"; badge = `+${repsDelta} reps`; }
-    else if (weightDelta === 0 && repsDelta === 0) { kind = "flat"; badge = "No change"; }
-    else { kind = "down"; badge = weightDelta < 0 ? `${fmt(weightDelta)} lbs` : `${repsDelta} reps`; }
+    if (repsOnly) {
+      // No weight logged at all for these — reps are the only signal,
+      // so skip the weight-delta branches entirely rather than comparing
+      // two exercises that were never actually weighted.
+      if (repsDelta > 0) { kind = "up"; badge = `+${repsDelta} reps`; }
+      else if (repsDelta === 0) { kind = "flat"; badge = "No change"; }
+      else { kind = "down"; badge = `${repsDelta} reps`; }
+    } else {
+      const weightDelta = thisBest.weight - lastBest.weight;
+      if (weightDelta > 0 && repsDelta >= 0) { kind = "pr"; badge = `PR · +${fmt(weightDelta)} lbs`; }
+      else if (weightDelta > 0) { kind = "up"; badge = `+${fmt(weightDelta)} lbs`; }
+      else if (weightDelta === 0 && repsDelta > 0) { kind = "up"; badge = `+${repsDelta} reps`; }
+      else if (weightDelta === 0 && repsDelta === 0) { kind = "flat"; badge = "No change"; }
+      else { kind = "down"; badge = weightDelta < 0 ? `${fmt(weightDelta)} lbs` : `${repsDelta} reps`; }
+    }
 
-    results.push({ exercise, lastBest, thisBest, kind, badge, group: thisWeek[thisWeek.length - 1].group });
+    results.push({ exercise, lastBest, thisBest, kind, badge, group: thisWeek[thisWeek.length - 1].group, repsOnly });
   });
 
   const order = { pr: 0, up: 1, flat: 2, down: 3 };
@@ -4277,7 +4434,9 @@ function WeeklyLiftImprovements({ workoutSessions }) {
             <div>
               <div style={{ fontSize: 13.5, fontWeight: 600, color: COLORS.cream, marginBottom: 3 }}>{r.exercise}</div>
               <div className="ft-mono" style={{ fontSize: 11.5, color: COLORS.creamDim }}>
-                {fmt(r.lastBest.weight)} lbs × {r.lastBest.reps} <span style={{ margin: "0 2px" }}>→</span> {fmt(r.thisBest.weight)} lbs × {r.thisBest.reps}
+                {r.repsOnly
+                  ? <>{r.lastBest.reps} reps <span style={{ margin: "0 2px" }}>→</span> {r.thisBest.reps} reps</>
+                  : <>{fmt(r.lastBest.weight)} lbs × {r.lastBest.reps} <span style={{ margin: "0 2px" }}>→</span> {fmt(r.thisBest.weight)} lbs × {r.thisBest.reps}</>}
               </div>
             </div>
             <span style={{ fontSize: 10.5, fontWeight: 700, padding: "5px 10px", borderRadius: 999, whiteSpace: "nowrap", background: style.bg, color: style.color }}>
@@ -5428,7 +5587,7 @@ function parseImportCsv(text) {
   return { rows, errors };
 }
 
-function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeature, entries, onImportCsv, userId }) {
+function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeature, entries, onImportCsv, userId, workoutSessions }) {
   const adaptive = useMemo(() => computeAdaptiveTDEE(entries, profile.goalType), [entries, profile.goalType]);
   const [importPreview, setImportPreview] = useState(null); // { rows, errors, fileName }
   const [importing, setImporting] = useState(false);
@@ -5550,6 +5709,7 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
     : null;
   const recommendedRate = getRecommendedMaxRate(profile.goalType, latestWeight);
   const rateOverRecommended = recommendedRate && rate > recommendedRate.max;
+  const muscleRetention = computeMuscleRetentionConfidence(entries, workoutSessions, profile, latestWeight);
 
   return (
     <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
@@ -5688,6 +5848,32 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
                     {miniCutOverdue
                       ? "You're past the recommended 6-week cap — consider moving back to maintenance for a week or two before continuing."
                       : `Recommended max: ${MINI_CUT_MAX_DAYS} days (6 weeks).`}
+                  </div>
+                </div>
+              )}
+              {muscleRetention && (
+                <div className="ft-card-raised" style={{ padding: 12, marginTop: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.cream }}>Muscle retention confidence</div>
+                    <div className="ft-mono" style={{ fontSize: 18, fontWeight: 800, color: muscleRetention.score >= 70 ? COLORS.mint : muscleRetention.score >= 45 ? COLORS.amber : COLORS.danger }}>
+                      {muscleRetention.score}%
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: COLORS.creamDim, marginBottom: 8, lineHeight: 1.4 }}>
+                    A heuristic estimate from your logged rate of loss, protein, training consistency, and strength trend since this mini cut started — not a body composition measurement.
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    {[
+                      ["Rate of loss", muscleRetention.factors.rate],
+                      ["Protein intake", muscleRetention.factors.protein],
+                      ["Strength trend", muscleRetention.factors.strength],
+                      ["Training consistency", muscleRetention.factors.consistency],
+                    ].map(([label, f]) => (
+                      <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 10.5 }}>
+                        <span style={{ color: COLORS.creamDim }}>{label}{f ? ` — ${f.detail}` : " — not enough data yet"}</span>
+                        {f && <span className="ft-mono" style={{ color: f.score >= 70 ? COLORS.mint : f.score >= 45 ? COLORS.amber : COLORS.danger, fontWeight: 700, flexShrink: 0, marginLeft: 8 }}>{f.score}</span>}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
