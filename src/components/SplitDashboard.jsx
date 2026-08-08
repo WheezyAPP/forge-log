@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Dumbbell, ChevronDown, ChevronUp, CalendarDays, Target, Check, RotateCcw,
   Repeat, ExternalLink, X as XIcon, ChevronRight, ChevronLeft, ArrowLeft, History, Trophy,
   AlertTriangle, TrendingUp, Plus, Trash2, Moon, Zap, Lock, Users, Eye, Search, BookmarkPlus, List,
-  Copy, ClipboardPaste, GripVertical,
+  Copy, ClipboardPaste,
 } from "lucide-react";
 import {
   SPLITS, pickExercises, getFixedProgram, EX, WEAK_POINT_OPTIONS, WEAK_POINT_MAX_PICKS,
@@ -166,13 +166,6 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     });
     setDirty(true); // reordering is an unsaved change, same as everything else on this screen
   }
-  // Same drag-to-reorder pattern, applied to whole DAYS in the planner
-  // instead of exercise cards within one day — state has to live here at
-  // the top level (rules of hooks), even though the handlers that
-  // actually use it are defined inside the planWeek view below, where
-  // dayKeys/reorderPlanDays/planLength are already in scope.
-  const [dragDayIndex, setDragDayIndex] = useState(null);
-  const dayCardRefs = useRef([]);
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   // True whenever `blocks` holds a typed weight/rep, an added/removed/
@@ -755,6 +748,13 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   }
 
   async function handleSaveDay() {
+    // Blurs whatever set/rep input still has focus before saving, so the
+    // on-screen keyboard starts closing immediately instead of still being
+    // (partway through its dismiss animation, or fully open) at the exact
+    // moment a validation error toast might fire below. Tapping the Save
+    // button already blurs the previous input in most cases, but this
+    // makes it happen deterministically rather than relying on that.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     await syncBlocksToDb({ silent: false });
   }
 
@@ -1537,44 +1537,26 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     // The calendar dates themselves are fixed — "reordering days" means
     // shifting which day's CONTENT (dayType/isRest/exercises) sits at
     // each fixed date slot, not moving the dates. dayKeys is that fixed,
-    // ordered list of slots; reorderPlanDays reassigns content across it
-    // the same way the exercise-card drag reorder (in the day-logging
-    // view) reassigns positions in an array — just applied to fixed
-    // calendar slots instead of a free-standing array.
+    // ordered list of slots; moveDraftDay reassigns content across it
+    // the same way moveBlock reassigns positions in the exercise-card
+    // array above — just applied to fixed calendar slots instead of a
+    // free-standing array. This used to be a drag handle (Pointer Events
+    // + setPointerCapture + a per-card ref to hit-test drop position),
+    // same as the exercise cards originally were — replaced with the
+    // same explicit up/down-button pattern for the same reason: no
+    // touch-gesture ambiguity left to debug, a tap either does the thing
+    // or it doesn't.
     const dayKeys = Array.from({ length: planLength }, (_, i) => localDateStr(addDays(today, i)));
-    function reorderPlanDays(fromIndex, toIndex) {
-      if (fromIndex === toIndex) return;
+    function moveDraftDay(index, direction) {
+      const target = index + direction;
+      if (target < 0 || target >= dayKeys.length) return;
       setPlanDrafts(prev => {
         const contents = dayKeys.map(k => prev[k]);
-        const [moved] = contents.splice(fromIndex, 1);
-        contents.splice(toIndex, 0, moved);
+        [contents[index], contents[target]] = [contents[target], contents[index]];
         const next = { ...prev };
         dayKeys.forEach((k, i) => { next[k] = contents[i]; });
         return next;
       });
-    }
-    function handleDayDragPointerDown(e, index) {
-      e.currentTarget.setPointerCapture(e.pointerId);
-      setDragDayIndex(index);
-    }
-    function handleDayDragPointerMove(e) {
-      if (dragDayIndex == null) return;
-      dayCardRefs.current.length = planLength; // drop stale entries from a previous, longer render
-      const y = e.clientY;
-      let targetIndex = dragDayIndex;
-      for (let i = 0; i < dayCardRefs.current.length; i++) {
-        const el = dayCardRefs.current[i];
-        if (!el) continue;
-        const rect = el.getBoundingClientRect();
-        if (y >= rect.top && y <= rect.bottom) { targetIndex = i; break; }
-      }
-      if (targetIndex !== dragDayIndex) {
-        reorderPlanDays(dragDayIndex, targetIndex);
-        setDragDayIndex(targetIndex);
-      }
-    }
-    function handleDayDragPointerUp() {
-      setDragDayIndex(null);
     }
     return (
     <div key="view-planWeek" className="ft-row-enter">
@@ -1582,8 +1564,8 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       <div style={{ fontSize:20, fontWeight:800, marginBottom:4 }}>{isEditingExisting ? "Edit" : "Plan"} your next {planLength} days</div>
       <div style={{ fontSize:11.5, color:C.creamDim, marginBottom:16, lineHeight:1.5 }}>
         {isEditingExisting
-          ? "This is the plan you already locked in — change anything below, or clear a day to drop it. Copy a day and paste it onto another, or drag the handle to reorder days. Nothing saves until you lock it in again."
-          : "Build out exactly what each day should look like ahead of time — your own exercises, your own day names, or mark it Rest. Copy a day and paste it onto another to reuse a pattern, or drag the handle to reorder days if your schedule shifts. Once locked in, these dates override your regular split until they pass; walk into the gym and just log weight and reps."}
+          ? "This is the plan you already locked in — change anything below, or clear a day to drop it. Copy a day and paste it onto another, or use the up/down arrows to reorder days. Nothing saves until you lock it in again."
+          : "Build out exactly what each day should look like ahead of time — your own exercises, your own day names, or mark it Rest. Copy a day and paste it onto another to reuse a pattern, or use the up/down arrows to reorder days if your schedule shifts. Once locked in, these dates override your regular split until they pass; walk into the gym and just log weight and reps."}
       </div>
       {isEditingExisting && (
         <button className="ft-btn ft-btn-ghost" style={{ marginBottom:14, fontSize:11 }} onClick={() => setView("planChoice")}>Start a different plan instead</button>
@@ -1615,17 +1597,13 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         const alreadyPlanned = !!customDayPlans?.[dateKey];
 
         return (
-          <div key={dateKey} ref={el => dayCardRefs.current[dayIdx] = el} className="ft-card" style={{ padding:14, marginBottom:10, opacity: dragDayIndex === dayIdx ? 0.5 : 1 }}>
+          <div key={dateKey} className="ft-card" style={{ padding:14, marginBottom:10 }}>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
               <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                <span
-                  onPointerDown={(e) => handleDayDragPointerDown(e, dayIdx)}
-                  onPointerMove={handleDayDragPointerMove}
-                  onPointerUp={handleDayDragPointerUp}
-                  onPointerCancel={handleDayDragPointerUp}
-                  title="Drag to move this day"
-                  style={{ display:"flex", color:C.creamDim, cursor:"grab", touchAction:"none" }}
-                ><GripVertical size={15}/></span>
+                <div style={{ display:"flex", flexDirection:"column", gap:1 }}>
+                  <button onClick={() => moveDraftDay(dayIdx, -1)} disabled={dayIdx === 0} aria-label="Move day up" style={{ background:"none", border:"none", color:C.creamDim, cursor: dayIdx===0?"default":"pointer", opacity: dayIdx===0?0.3:1, padding:2, minWidth:28, minHeight:22, display:"flex", alignItems:"center", justifyContent:"center" }}><ChevronUp size={16}/></button>
+                  <button onClick={() => moveDraftDay(dayIdx, 1)} disabled={dayIdx === planLength-1} aria-label="Move day down" style={{ background:"none", border:"none", color:C.creamDim, cursor: dayIdx===planLength-1?"default":"pointer", opacity: dayIdx===planLength-1?0.3:1, padding:2, minWidth:28, minHeight:22, display:"flex", alignItems:"center", justifyContent:"center" }}><ChevronDown size={16}/></button>
+                </div>
                 <div style={{ fontWeight:700, fontSize:13 }}>{fmtDay(date)}</div>
               </div>
               <div style={{ display:"flex", alignItems:"center", gap:10 }}>

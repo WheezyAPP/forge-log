@@ -10,10 +10,48 @@ const KIND_STYLE = {
 
 export default function ToastStack() {
   const [toasts, setToasts] = useState([]);
+  // How much of the viewport's bottom edge is currently covered by
+  // something the CSS box model doesn't know about — almost always an
+  // on-screen mobile keyboard. `position: fixed` anchors to the LAYOUT
+  // viewport, which iOS/Android do NOT shrink when a keyboard opens, so a
+  // purely CSS bottom-offset can render behind the keyboard — including
+  // during its dismiss animation, which is exactly when a validation
+  // error toast from tapping Save right after typing tends to fire. This
+  // used to be exactly that: a static `bottom: calc(safe-area + 84px)`
+  // — confirmed as the likely cause of a real "saved but nothing
+  // happened, no error shown" report (Shelby, a day with only weight or
+  // only reps filled in on every set — the actual validation toast almost
+  // certainly did fire, just invisibly). VisualViewport reports the
+  // ACTUAL visible area live, so this tracks the real keyboard height
+  // instead of guessing at one — same self-correcting spirit as the
+  // ResizeObserver-based nav clearance elsewhere in the app.
+  const [keyboardInset, setKeyboardInset] = useState(0);
 
   useEffect(() => onToastsChange(setToasts), []);
 
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return; // unsupported browser — falls back to the static safe-area offset below
+    function update() {
+      setKeyboardInset(Math.max(0, window.innerHeight - vv.height - vv.offsetTop));
+    }
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, []);
+
   if (toasts.length === 0) return null;
+
+  // A small threshold (not >0) so ordinary address-bar show/hide during
+  // scroll — which also nudges visualViewport's height slightly — doesn't
+  // get mistaken for a keyboard; real on-screen keyboards run 200px+.
+  const bottom = keyboardInset > 40
+    ? `${keyboardInset + 12}px`
+    : "calc(env(safe-area-inset-bottom, 0px) + 84px)";
 
   return (
     <div
@@ -21,7 +59,7 @@ export default function ToastStack() {
         position: "fixed",
         left: "50%",
         transform: "translateX(-50%)",
-        bottom: "calc(env(safe-area-inset-bottom, 0px) + 84px)",
+        bottom,
         zIndex: 9999,
         display: "flex",
         flexDirection: "column",

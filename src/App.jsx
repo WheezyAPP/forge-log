@@ -50,6 +50,7 @@ import {
   Layers,
   Copy,
   AlertCircle,
+  Maximize2,
 } from "lucide-react";
 import UserSelect from "./components/UserSelect";
 import SplitDashboard from "./components/SplitDashboard";
@@ -3147,26 +3148,22 @@ function LogEntry(props) {
           <Field label="Carbs (g)"><input className="ft-input" type="number" inputMode="decimal" onFocus={selectOnFocus} value={carbInput} onChange={(e) => setCarbInput(e.target.value)} placeholder="200" /></Field>
           <Field label="Fat (g)"><input className="ft-input" type="number" inputMode="decimal" onFocus={selectOnFocus} value={fatInput} onChange={(e) => setFatInput(e.target.value)} placeholder="60" /></Field>
           <Field label="Creatine">
-            <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", padding: "8px 0" }}>
-              <input
-                type="checkbox"
-                checked={parseFloat(creatineInput) > 0}
-                onChange={(e) => handleToggleCreatine(e.target.checked)}
-                style={{ width: 18, height: 18, accentColor: COLORS.ember, cursor: "pointer" }}
-              />
-              <span style={{ fontSize: 13.5, color: COLORS.cream }}>Took my 5g today</span>
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", padding: "2px 0 6px" }}>
-              <input
-                type="checkbox"
-                checked={!!profile.creatineAlreadySaturated}
-                onChange={(e) => onProfileChange({ creatineAlreadySaturated: e.target.checked })}
-                style={{ width: 15, height: 15, accentColor: COLORS.mint, cursor: "pointer" }}
-              />
-              <span style={{ fontSize: 11.5, color: COLORS.creamDim }}>
-                Already taking creatine consistently before joining? <span style={{ color: COLORS.mint }}>Mark as already saturated</span>
-              </span>
-            </label>
+            <TouchCheckbox
+              checked={parseFloat(creatineInput) > 0}
+              onChange={(next) => handleToggleCreatine(next)}
+              accent={COLORS.ember}
+            >
+              Took my 5g today
+            </TouchCheckbox>
+            <TouchCheckbox
+              checked={!!profile.creatineAlreadySaturated}
+              onChange={(next) => onProfileChange({ creatineAlreadySaturated: next })}
+              accent={COLORS.mint}
+              compact
+              labelStyle={{ fontSize: 11.5, color: COLORS.creamDim }}
+            >
+              Already taking creatine consistently before joining? <span style={{ color: COLORS.mint }}>Mark as already saturated</span>
+            </TouchCheckbox>
           </Field>
         </div>
         <div style={{ fontSize: 11, color: COLORS.creamDim, marginBottom: 16 }}>
@@ -3417,6 +3414,62 @@ function Field({ label, children }) {
     <div>
       <span className="ft-label">{label}</span>
       {children}
+    </div>
+  );
+}
+
+// Custom checkbox with a large, generous tap target — replaces bare
+// native <input type="checkbox"> elements, whose visual box (often
+// well under the ~44px minimum reliable mobile touch target) is what
+// mobile browsers use to size the actual hit region even when it sits
+// inside a <label>. The whole row (icon box + text + surrounding
+// padding) is clickable/tappable here instead, with real min-height
+// enforced via --ft-touch so the fix doesn't regress if the box shrinks.
+function TouchCheckbox({ checked, onChange, accent, compact, labelStyle, children }) {
+  const boxSize = compact ? 18 : 20;
+  return (
+    <div
+      role="checkbox"
+      aria-checked={checked}
+      tabIndex={0}
+      onClick={() => onChange(!checked)}
+      onKeyDown={(e) => {
+        if (e.key === " " || e.key === "Enter") {
+          e.preventDefault();
+          onChange(!checked);
+        }
+      }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "10px 8px",
+        margin: "0 -8px",
+        minHeight: "var(--ft-touch)",
+        boxSizing: "border-box",
+        borderRadius: 10,
+        cursor: "pointer",
+        WebkitTapHighlightColor: "transparent",
+        userSelect: "none",
+      }}
+    >
+      <span
+        style={{
+          flexShrink: 0,
+          width: boxSize,
+          height: boxSize,
+          borderRadius: 6,
+          border: `1.5px solid ${checked ? accent : COLORS.border}`,
+          background: checked ? accent : "transparent",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          transition: "background 0.15s ease, border-color 0.15s ease",
+        }}
+      >
+        {checked && <Check size={compact ? 12 : 14} color={COLORS.bg} strokeWidth={3} />}
+      </span>
+      <span style={{ fontSize: 13.5, color: COLORS.cream, lineHeight: 1.35, ...labelStyle }}>{children}</span>
     </div>
   );
 }
@@ -5111,6 +5164,104 @@ function SetCoverageTab({ workoutSessions, profile, onProfileChange }) {
   );
 }
 
+// Short "Aug 8" style date, for axis ticks/tooltips in the expanded
+// chart view — the compact preview charts use `label` (weekday + day-
+// of-month only, no month) since they're dense and space-starved, but
+// once a chart has real room in the pop-out, showing the month makes a
+// point unambiguous without having to count backward from today.
+function monthDay(dateStr) {
+  return new Date(dateStr + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// Restricts a chartData-shaped array (must have a `date` field, "YYYY-
+// MM-DD") to the 30 days trailing the most recent point in it — anchored
+// to the latest actual log, not to today, so it still shows a full
+// window for someone who hasn't logged yet today.
+function last30Days(data) {
+  if (data.length === 0) return data;
+  const anchor = new Date(data[data.length - 1].date + "T00:00:00");
+  const cutoff = new Date(anchor);
+  cutoff.setDate(cutoff.getDate() - 29);
+  return data.filter((d) => new Date(d.date + "T00:00:00") >= cutoff);
+}
+
+// Wraps one of the Trends tab's chart cards so it's tappable into a
+// bigger, pop-out version of the same chart with a date-range toggle —
+// the compact inline charts (fixed small height, abbreviated axis
+// labels) are what made this tab hard to actually read on a phone.
+// `renderChart(data, height)` is a render-prop so each card can keep its
+// own chart type/series/tooltip config; this component only owns the
+// open/close state and the All-time vs Last-30-days filtering.
+function ExpandableChartCard({ title, subtitle, headerExtra, data, renderChart, previewHeight = 220 }) {
+  const [open, setOpen] = useState(false);
+  const [range, setRange] = useState("30");
+  const modalData = (range === "30" ? last30Days(data) : data).map((d) => ({ ...d, modalLabel: monthDay(d.date) }));
+
+  return (
+    <>
+      <div
+        className="ft-card ft-card-clickable"
+        style={{ padding: 18, cursor: "pointer" }}
+        onClick={() => setOpen(true)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(true); } }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: subtitle ? 2 : 10, flexWrap: "wrap", gap: 8 }}>
+          <div className="ft-label" style={{ marginBottom: 0 }}>{title}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {headerExtra}
+            <Maximize2 size={13} color={COLORS.creamDim} />
+          </div>
+        </div>
+        {subtitle && <div style={{ fontSize: 10.5, color: COLORS.creamDim, marginBottom: 10 }}>{subtitle}</div>}
+        <div className="ft-scroll" style={{ overflowX: "auto", pointerEvents: "none" }}>
+          {renderChart(data, previewHeight)}
+        </div>
+      </div>
+
+      {open && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+          onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+        >
+          <div className="ft-card" style={{ padding: 20, maxWidth: 640, width: "100%", maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+              <div className="ft-label" style={{ marginBottom: 0 }}>{title}</div>
+              <button className="ft-btn ft-btn-ghost" style={{ padding: "4px 8px" }} onClick={() => setOpen(false)}><X size={14} /></button>
+            </div>
+            {subtitle && <div style={{ fontSize: 10.5, color: COLORS.creamDim, marginBottom: 10 }}>{subtitle}</div>}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+              <button
+                className="ft-btn ft-btn-ghost"
+                onClick={() => setRange("30")}
+                style={{ fontSize: 11, padding: "5px 11px", color: range === "30" ? COLORS.ember : COLORS.creamDim, border: `1px solid ${range === "30" ? COLORS.ember : COLORS.border}` }}
+              >
+                Last 30 days
+              </button>
+              <button
+                className="ft-btn ft-btn-ghost"
+                onClick={() => setRange("all")}
+                style={{ fontSize: 11, padding: "5px 11px", color: range === "all" ? COLORS.ember : COLORS.creamDim, border: `1px solid ${range === "all" ? COLORS.ember : COLORS.border}` }}
+              >
+                All time
+              </button>
+              {headerExtra}
+            </div>
+            {modalData.length === 0 ? (
+              <div style={{ padding: "30px 0", textAlign: "center", color: COLORS.creamDim, fontSize: 12.5 }}>No data in this range.</div>
+            ) : (
+              <div className="ft-scroll" style={{ overflowX: "auto" }}>
+                {renderChart(modalData, 320, true)}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function Trends({ chartData, workoutSessions, showLifts = true, showWater = true, profile }) {
   const [smoothWeight, setSmoothWeight] = useState(true);
 
@@ -5123,29 +5274,39 @@ function Trends({ chartData, workoutSessions, showLifts = true, showWater = true
   }
 
   const weightData = smoothWeight ? rollingAverage(chartData, "weight", 3) : chartData;
-  // Fixed per-point width instead of stretching to the container — on
-  // mobile with many days logged, cramming every date label into a
-  // narrow viewport is what made this chart feel cluttered. Scrolling
-  // horizontally at a readable density fixes that without losing detail.
-  const weightChartWidth = Math.max(320, weightData.length * 46);
+  // Point-width used to size the fixed-width, horizontally-scrolling
+  // chart in each card — on mobile with many days logged, cramming every
+  // date label into a narrow viewport (or a stretched-to-fit
+  // ResponsiveContainer) is what made this tab feel cluttered/unreadable.
+  // Scrolling horizontally at a readable density fixes that without
+  // losing detail; the pop-out modal gets extra room per point since
+  // it's not competing with the rest of the page for width.
+  function chartWidth(data, isModal) {
+    return Math.max(isModal ? 420 : 300, data.length * (isModal ? 56 : 42));
+  }
+  const smoothToggle = (
+    <button
+      className="ft-btn ft-btn-ghost"
+      onClick={(e) => { e.stopPropagation(); setSmoothWeight((s) => !s); }}
+      style={{ fontSize: 11, padding: "5px 11px", color: smoothWeight ? COLORS.ember : COLORS.creamDim, border: `1px solid ${smoothWeight ? COLORS.ember : COLORS.border}` }}
+    >
+      {smoothWeight ? "3-day average" : "Daily readings"}
+    </button>
+  );
+  const cutting = profile?.goalType === "lose" || profile?.goalType === "mini_cut";
+  const bodyFatVisible = isBodyFatVisible(profile);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div className="ft-card" style={{ padding: 18 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-          <div className="ft-label" style={{ marginBottom: 0 }}>Weight (lbs)</div>
-          <button
-            className="ft-btn ft-btn-ghost"
-            onClick={() => setSmoothWeight((s) => !s)}
-            style={{ fontSize: 11, padding: "5px 11px", color: smoothWeight ? COLORS.ember : COLORS.creamDim, border: `1px solid ${smoothWeight ? COLORS.ember : COLORS.border}` }}
-          >
-            {smoothWeight ? "3-day average" : "Daily readings"}
-          </button>
-        </div>
-        <div className="ft-scroll" style={{ overflowX: "auto" }}>
-          <LineChart width={weightChartWidth} height={220} data={weightData}>
+      <ExpandableChartCard
+        title="Weight (lbs)"
+        subtitle={smoothWeight ? "Smoothed — each point averages that day with the 2 before it." : null}
+        headerExtra={smoothToggle}
+        data={weightData}
+        renderChart={(data, height, isModal) => (
+          <LineChart width={chartWidth(data, isModal)} height={height} data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
-            <XAxis dataKey="label" stroke={COLORS.creamDim} fontSize={11} />
+            <XAxis dataKey={isModal ? "modalLabel" : "label"} stroke={COLORS.creamDim} fontSize={11} />
             <YAxis stroke={COLORS.creamDim} fontSize={11} domain={["auto", "auto"]} />
             <Tooltip
               contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.cream }}
@@ -5153,96 +5314,83 @@ function Trends({ chartData, workoutSessions, showLifts = true, showWater = true
             />
             <Line type="monotone" dataKey="weight" stroke={COLORS.ember} strokeWidth={2.5} dot={{ r: 3 }} connectNulls />
           </LineChart>
-        </div>
-        {smoothWeight && <div style={{ fontSize: 10.5, color: COLORS.creamDim, marginTop: 6 }}>Smoothed — each point averages that day with the 2 before it.</div>}
-      </div>
+        )}
+      />
 
-      <div className="ft-card" style={{ padding: 18 }}>
-        <div className="ft-label" style={{ marginBottom: 10 }}>
-          {isBodyFatVisible(profile) ? "Estimated body fat % & fat mass" : "Estimated fat mass"}
-        </div>
-        <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={chartData}>
+      <ExpandableChartCard
+        title={bodyFatVisible ? "Estimated body fat % & fat mass" : "Estimated fat mass"}
+        data={chartData}
+        renderChart={(data, height, isModal) => (
+          <LineChart width={chartWidth(data, isModal)} height={height} data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
-            <XAxis dataKey="label" stroke={COLORS.creamDim} fontSize={11} />
+            <XAxis dataKey={isModal ? "modalLabel" : "label"} stroke={COLORS.creamDim} fontSize={11} />
             <YAxis stroke={COLORS.creamDim} fontSize={11} domain={["auto", "auto"]} />
             <Tooltip contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.cream }} />
-            {isBodyFatVisible(profile) && <Line type="monotone" dataKey="bodyFatPct" stroke={COLORS.amber} strokeWidth={2.5} dot={{ r: 3 }} name="Body fat %" />}
+            {bodyFatVisible && <Line type="monotone" dataKey="bodyFatPct" stroke={COLORS.amber} strokeWidth={2.5} dot={{ r: 3 }} name="Body fat %" />}
             <Line type="monotone" dataKey="fatLbs" stroke={COLORS.ember} strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="Fat lbs" />
           </LineChart>
-        </ResponsiveContainer>
-      </div>
+        )}
+      />
 
       {showWater && (
-        <div className="ft-card" style={{ padding: 18 }}>
-          <div className="ft-label" style={{ marginBottom: 2 }}>Water intake</div>
-          <div style={{ fontSize: 10.5, color: COLORS.creamDim, marginBottom: 10 }}>
-            Goal line moves day to day — it includes the creatine hydration bonus on days that applied.
-          </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <ComposedChart data={chartData}>
+        <ExpandableChartCard
+          title="Water intake"
+          subtitle="Goal line moves day to day — it includes the creatine hydration bonus on days that applied."
+          data={chartData}
+          renderChart={(data, height, isModal) => (
+            <ComposedChart width={chartWidth(data, isModal)} height={height} data={data}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
-              <XAxis dataKey="label" stroke={COLORS.creamDim} fontSize={11} />
+              <XAxis dataKey={isModal ? "modalLabel" : "label"} stroke={COLORS.creamDim} fontSize={11} />
               <YAxis stroke={COLORS.creamDim} fontSize={11} />
               <Tooltip
                 contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.cream }}
                 formatter={(value, name) => [`${fmt(value)} oz`, name === "waterOz" ? "Consumed" : "Goal"]}
               />
               <Bar dataKey="waterOz" radius={[4, 4, 0, 0]}>
-                {chartData.map((d, i) => (
+                {data.map((d, i) => (
                   <Cell key={i} fill={d.waterOz >= d.waterGoalOz && d.waterGoalOz > 0 ? COLORS.mint : COLORS.ember} />
                 ))}
               </Bar>
               <Line type="stepAfter" dataKey="waterGoalOz" stroke={COLORS.creamDim} strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="Goal" />
             </ComposedChart>
-          </ResponsiveContainer>
-        </div>
+          )}
+        />
       )}
 
-      <div className="ft-card" style={{ padding: 18 }}>
-        {(() => {
-          // On a cut, a deficit IS the progress — flipping the y-axis makes
-          // your good days point up instead of down, which reads far more
-          // intuitively while cutting. Untouched for maintain/gain.
-          const cutting = profile?.goalType === "lose" || profile?.goalType === "mini_cut";
-          return (
-            <>
-              <div className="ft-label" style={{ marginBottom: 10 }}>
-                Daily calorie balance (vs. maintenance){cutting ? " — axis flipped: deficit points up" : ""}
-              </div>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
-                  <XAxis dataKey="label" stroke={COLORS.creamDim} fontSize={11} />
-                  <YAxis stroke={COLORS.creamDim} fontSize={11} reversed={cutting} />
-                  <Tooltip contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.cream }} />
-                  <ReferenceLine y={0} stroke={COLORS.creamDim} />
-                  <Bar dataKey="balance" radius={[4, 4, 4, 4]}>
-                    {chartData.map((d, i) => (
-                      <Cell key={i} fill={d.balance < 0 ? COLORS.mint : COLORS.amber} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </>
-          );
-        })()}
-      </div>
-
-      <div className="ft-card" style={{ padding: 18 }}>
-        <div className="ft-label" style={{ marginBottom: 10 }}>Calories consumed vs. maintenance (TDEE)</div>
-        <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={chartData}>
+      <ExpandableChartCard
+        title={`Daily calorie balance (vs. maintenance)${cutting ? " — axis flipped: deficit points up" : ""}`}
+        data={chartData}
+        renderChart={(data, height, isModal) => (
+          <BarChart width={chartWidth(data, isModal)} height={height} data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
-            <XAxis dataKey="label" stroke={COLORS.creamDim} fontSize={11} />
+            <XAxis dataKey={isModal ? "modalLabel" : "label"} stroke={COLORS.creamDim} fontSize={11} />
+            <YAxis stroke={COLORS.creamDim} fontSize={11} reversed={cutting} />
+            <Tooltip contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.cream }} />
+            <ReferenceLine y={0} stroke={COLORS.creamDim} />
+            <Bar dataKey="balance" radius={[4, 4, 4, 4]}>
+              {data.map((d, i) => (
+                <Cell key={i} fill={d.balance < 0 ? COLORS.mint : COLORS.amber} />
+              ))}
+            </Bar>
+          </BarChart>
+        )}
+      />
+
+      <ExpandableChartCard
+        title="Calories consumed vs. maintenance (TDEE)"
+        data={chartData}
+        renderChart={(data, height, isModal) => (
+          <LineChart width={chartWidth(data, isModal)} height={height} data={data}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+            <XAxis dataKey={isModal ? "modalLabel" : "label"} stroke={COLORS.creamDim} fontSize={11} />
             <YAxis stroke={COLORS.creamDim} fontSize={11} />
             <Tooltip contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.cream }} />
             <Line type="monotone" dataKey="caloriesConsumed" stroke={COLORS.amber} strokeWidth={2} dot={{ r: 3 }} name="Consumed (cal)" />
             <Line type="monotone" dataKey="suggestedCalories" stroke={COLORS.mint} strokeWidth={1.5} strokeDasharray="5 3" dot={false} name="Goal (cal)" />
             <Line type="monotone" dataKey="tdee" stroke={COLORS.creamDim} strokeWidth={1.5} strokeDasharray="3 3" dot={false} name="Maintenance (cal)" />
           </LineChart>
-        </ResponsiveContainer>
-      </div>
+        )}
+      />
 
       {showLifts && <WeeklyLiftImprovements workoutSessions={workoutSessions} />}
     </div>
