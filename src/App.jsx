@@ -56,7 +56,7 @@ import SplitDashboard from "./components/SplitDashboard";
 import PartnerTraining from "./components/PartnerTraining";
 import FoodSearch from "./components/FoodSearch";
 import ToastStack from "./components/ToastStack";
-import { calcAttendanceGrade, calcRawAttendanceGrade, getProgressionSuggestion, SPLITS, ANATOMICAL_GROUPS, computeSetCoverage, computeSetCoverageDetailed, sessionBest1RM, REPS_ONLY_EXERCISES } from "./lib/splits";
+import { calcAttendanceGrade, calcRawAttendanceGrade, getProgressionSuggestion, SPLITS, ANATOMICAL_GROUPS, computeSetCoverage, computeSetCoverageDetailed, sessionBest1RM } from "./lib/splits";
 import {
   loadProfile,
   saveProfile,
@@ -4375,26 +4375,16 @@ function buildWeeklyLiftComparisons(workoutSessions) {
     const lastBest = bestSet(lastWeek);
     if (!thisBest || !lastBest) return;
 
-    const repsOnly = REPS_ONLY_EXERCISES.has(exercise);
+    const weightDelta = thisBest.weight - lastBest.weight;
     const repsDelta = thisBest.reps - lastBest.reps;
     let kind, badge;
-    if (repsOnly) {
-      // No weight logged at all for these — reps are the only signal,
-      // so skip the weight-delta branches entirely rather than comparing
-      // two exercises that were never actually weighted.
-      if (repsDelta > 0) { kind = "up"; badge = `+${repsDelta} reps`; }
-      else if (repsDelta === 0) { kind = "flat"; badge = "No change"; }
-      else { kind = "down"; badge = `${repsDelta} reps`; }
-    } else {
-      const weightDelta = thisBest.weight - lastBest.weight;
-      if (weightDelta > 0 && repsDelta >= 0) { kind = "pr"; badge = `PR · +${fmt(weightDelta)} lbs`; }
-      else if (weightDelta > 0) { kind = "up"; badge = `+${fmt(weightDelta)} lbs`; }
-      else if (weightDelta === 0 && repsDelta > 0) { kind = "up"; badge = `+${repsDelta} reps`; }
-      else if (weightDelta === 0 && repsDelta === 0) { kind = "flat"; badge = "No change"; }
-      else { kind = "down"; badge = weightDelta < 0 ? `${fmt(weightDelta)} lbs` : `${repsDelta} reps`; }
-    }
+    if (weightDelta > 0 && repsDelta >= 0) { kind = "pr"; badge = `PR · +${fmt(weightDelta)} lbs`; }
+    else if (weightDelta > 0) { kind = "up"; badge = `+${fmt(weightDelta)} lbs`; }
+    else if (weightDelta === 0 && repsDelta > 0) { kind = "up"; badge = `+${repsDelta} reps`; }
+    else if (weightDelta === 0 && repsDelta === 0) { kind = "flat"; badge = "No change"; }
+    else { kind = "down"; badge = weightDelta < 0 ? `${fmt(weightDelta)} lbs` : `${repsDelta} reps`; }
 
-    results.push({ exercise, lastBest, thisBest, kind, badge, group: thisWeek[thisWeek.length - 1].group, repsOnly });
+    results.push({ exercise, lastBest, thisBest, kind, badge, group: thisWeek[thisWeek.length - 1].group });
   });
 
   const order = { pr: 0, up: 1, flat: 2, down: 3 };
@@ -4434,9 +4424,7 @@ function WeeklyLiftImprovements({ workoutSessions }) {
             <div>
               <div style={{ fontSize: 13.5, fontWeight: 600, color: COLORS.cream, marginBottom: 3 }}>{r.exercise}</div>
               <div className="ft-mono" style={{ fontSize: 11.5, color: COLORS.creamDim }}>
-                {r.repsOnly
-                  ? <>{r.lastBest.reps} reps <span style={{ margin: "0 2px" }}>→</span> {r.thisBest.reps} reps</>
-                  : <>{fmt(r.lastBest.weight)} lbs × {r.lastBest.reps} <span style={{ margin: "0 2px" }}>→</span> {fmt(r.thisBest.weight)} lbs × {r.thisBest.reps}</>}
+                {fmt(r.lastBest.weight)} lbs × {r.lastBest.reps} <span style={{ margin: "0 2px" }}>→</span> {fmt(r.thisBest.weight)} lbs × {r.thisBest.reps}
               </div>
             </div>
             <span style={{ fontSize: 10.5, fontWeight: 700, padding: "5px 10px", borderRadius: 999, whiteSpace: "nowrap", background: style.bg, color: style.color }}>
@@ -4752,7 +4740,7 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gend
                 {shownValue != null ? `${fmt(shownValue)} lbs` : "—"}
               </div>
               <div style={{ fontSize: 11, color: COLORS.creamDim }}>
-                {max ? `as of ${prettyDate(max.date).split(",")[0]}` : "no confirmed max yet"}
+                {max ? `as of ${prettyDate(max.date)}` : "no confirmed max yet"}
               </div>
               {pr && <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.mint, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}><Trophy size={12} /> New max</div>}
               {goals[key] != null && (
@@ -4777,7 +4765,7 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gend
                   {[...history].reverse().slice(0, 4).map(a => (
                     <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
                       <span style={{ width: 6, height: 6, borderRadius: "50%", background: a.pass ? COLORS.mint : COLORS.danger, flexShrink: 0 }} />
-                      <span style={{ color: COLORS.creamDim, flex: 1 }}>{prettyDate(a.date).split(",")[0]}</span>
+                      <span style={{ color: COLORS.creamDim, flex: 1 }}>{prettyDate(a.date)}</span>
                       <span className="ft-mono" style={{ fontWeight: 600 }}>{fmt(a.weight)} lbs</span>
                       <button onClick={() => removeAttempt(key, a.id)} aria-label="Delete attempt" style={{ background: "none", border: "none", color: COLORS.creamDim, cursor: "pointer", padding: 2 }}><X size={11} /></button>
                     </div>

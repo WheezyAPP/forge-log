@@ -2,15 +2,6 @@
 // Shared split definitions, exercise database, and utility functions.
 // Used by LiftingSchedule.jsx (UI) and App.jsx (attendance grade).
 
-/* ── Reps-only exercises ──────────────────────────────────────────
-   Exercises tracked by rep count alone — no weight field, not even a
-   bodyweight-derived one. Dragon Flys is the first: it's loaded by
-   leverage (how far the legs extend), not a number worth typing in
-   every set. Exported so every place that touches a logged set —
-   SplitDashboard's logging UI, App.jsx's weekly comparison widget,
-   etc. — agrees on which exercises skip weight entirely. */
-export const REPS_ONLY_EXERCISES = new Set(["Dragon Flys"]);
-
 /* ── Seeded random ─────────────────────────────────────────────── */
 export function seededShuffle(arr, seed) {
   const a = [...arr];
