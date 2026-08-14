@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Dumbbell, ChevronDown, ChevronUp, CalendarDays, Target, Check, RotateCcw,
   Repeat, ExternalLink, X as XIcon, ChevronRight, ChevronLeft, ArrowLeft, History, Trophy,
@@ -52,7 +52,7 @@ function isAssistedBodyweight(name) {
 // hold time, tracked the same way) as the only thing that actually
 // progresses. Showing an empty "lbs" field for these was always going
 // to sit blank forever — reps and sets are the whole story.
-const REPS_ONLY_EXERCISES = new Set(["Dragon Flags"]);
+const REPS_ONLY_EXERCISES = new Set(["Dragon Flags", "Dragon Flys"]);
 
 // Glute-ham raises and Nordic curls anchor the lower legs and move the
 // torso against gravity — real resistance, but nowhere near full
@@ -431,11 +431,31 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       // pattern below, unaffected.
       const custom = customDayPlans?.[dateKey];
       if (custom) {
+        // A custom day plan can name specific exercises (from the
+        // planWeek builder) OR just a dayType with no exercises listed
+        // (from shuffling days below — swapping which TYPE of day falls
+        // on which date, not freezing a specific exercise list). The
+        // latter should still resolve exercises through the normal
+        // getFixedProgram/pickExercises rotation for that type, same as
+        // any other day of that type — so def/occ get computed the same
+        // way the regular pattern branch below does, using the swapped-in
+        // dayType against this date's actual weekday position.
+        const hasNamedExercises = !custom.isRest && custom.exercises && custom.exercises.length > 0;
+        const pi = (date.getDay() + 6) % 7;
+        // Only resolved for a type-only override — a genuine hand-picked
+        // exercise list (from the planWeek builder) always keeps def null
+        // regardless of what its freeform day name happens to be, same
+        // as before this change, so a custom day someone happened to
+        // name "Push" doesn't accidentally get treated as a split-defined
+        // type and show the wrong summary line or resolve exercises the
+        // wrong way.
+        const def = (!custom.isRest && !hasNamedExercises) ? effectiveSplit.defs[custom.dayType] : null;
+        const occ = def ? effectiveSplit.pattern.slice(0, pi).filter(t => t === custom.dayType).length : 0;
         return {
           i, date, dateKey, dateStr: fmtDay(date),
-          dayType: custom.dayType, isRest: custom.isRest, def: null, occ: 0,
+          dayType: custom.dayType, isRest: custom.isRest, def, occ,
           isToday: i === 0, isDone: loggedSessions.length > 0, loggedSessions,
-          customExercises: custom.isRest ? null : custom.exercises,
+          customExercises: hasNamedExercises ? custom.exercises : null,
           isCustomPlanned: true,
         };
       }
@@ -458,6 +478,42 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     setJustSavedPRs([]);
   }
   function openAdhoc(day) { setDayOffset(day.i); setBlocks([]); setView("day"); setJustSaved(false); setDirty(false); setJustSavedPRs([]); }
+
+  // The last visible slot is a free-pick "Optional Day" until it's
+  // actually been assigned a type — nothing to swap FROM there yet.
+  function isOptionalPlaceholder(day) {
+    return day.i === 3 && !day.isDone && !day.isCustomPlanned;
+  }
+  // Already-logged days are locked in for real — swapping what a day
+  // WAS doesn't make sense once real weights/reps are attached to it. A
+  // day with a full hand-picked exercise list (a genuinely custom day
+  // from the planWeek builder, with its own freeform name) is also
+  // excluded — its dayType isn't necessarily one of the split's own
+  // defined types, so swapping that name into a plain slot could leave
+  // it unable to resolve any exercises at all. Type-only overrides (from
+  // a previous shuffle) stay swappable, since those always carry a real
+  // split day-type.
+  function canShuffle(day) {
+    return !!day && !day.isDone && !isOptionalPlaceholder(day) && !(day.isCustomPlanned && day.customExercises);
+  }
+  // Swaps which workout falls on which date between two adjacent visible
+  // slots — e.g. today's Push with tomorrow's Pull, because something
+  // came up and today works better as a rest day instead. Saved as a
+  // type-only custom day plan for each date (dayType + isRest, no named
+  // exercises) rather than a full custom exercise list, so exercises
+  // still resolve through the normal weekly rotation for whichever type
+  // ends up there — a shuffle changes WHEN a workout happens, not what's
+  // actually in it.
+  async function shuffleDay(index, direction) {
+    const target = index + direction;
+    const dayA = next3[index];
+    const dayB = next3[target];
+    if (!canShuffle(dayA) || !canShuffle(dayB)) return;
+    await Promise.all([
+      onSaveCustomDayPlan?.({ date: dayA.dateKey, dayType: dayB.dayType, isRest: dayB.isRest, exercises: [] }),
+      onSaveCustomDayPlan?.({ date: dayB.dateKey, dayType: dayA.dayType, isRest: dayA.isRest, exercises: [] }),
+    ]);
+  }
 
   // "Follow my partner" — always today, since this only makes sense for
   // a live joint session, not planning out someone else's future days.
@@ -637,16 +693,33 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   const [autoSaving, setAutoSaving] = useState(false);
   const [lastAutoSavedAt, setLastAutoSavedAt] = useState(null);
 
-  // The actual persistence logic, shared between the manual Save button
-  // and the auto-save effect below. silent=true (auto-save) skips the
-  // "nothing valid yet" error toast — there's nothing wrong with someone
-  // still mid-typing, it just means there's nothing to persist YET — and
-  // skips the PR-celebration UI, which belongs to the deliberate "I'm
-  // done" tap, not a background sync. Both paths use the identical
-  // delete-then-reinsert cycle, so what ends up in the database is
-  // always exactly what auto-save and manual save would each produce on
-  // their own — no risk of the two ever disagreeing with each other.
-  async function syncBlocksToDb({ silent = false } = {}) {
+  // Every call to syncBlocksToDb runs its own delete-then-reinsert cycle
+  // against Supabase — correct in isolation, but not against ANOTHER call
+  // for the same date/split running at the same time. The debounced
+  // auto-save effect below only guards against a MANUAL save already in
+  // flight (`saving`); it never guarded against a PRIOR silent auto-save
+  // still in flight, so two auto-saves could genuinely overlap — fill in
+  // one exercise (auto-save #1 starts, awaiting its own delete+insert
+  // round trip), then fill in another before that round trip finishes
+  // (blocks changes again, the effect reschedules, and once THAT timer
+  // fires, auto-save #2 starts while #1 is still mid-flight). Two
+  // interleaved delete-then-insert cycles is exactly how duplicate rows
+  // appeared for real: confirmed on Shelby's actual data, where every
+  // exercise present in both overlapping saves' snapshots ended up
+  // inserted twice, while exercises only in the later snapshot appeared
+  // once. Chaining every call onto this queue forces strict one-at-a-time
+  // execution — nothing is ever dropped, a call just waits its turn, so
+  // even a caller that arrives mid-save still gets its own full
+  // save (and, for the manual path, its own toast/PR treatment) once
+  // the one ahead of it finishes.
+  const saveQueueRef = useRef(Promise.resolve());
+  function syncBlocksToDb(opts) {
+    const run = saveQueueRef.current.then(() => syncBlocksToDbInner(opts));
+    saveQueueRef.current = run.catch(() => {}); // one failed save shouldn't wedge the queue for the next caller
+    return run;
+  }
+
+  async function syncBlocksToDbInner({ silent = false } = {}) {
     // Reps-only exercises (Dragon Flags etc.) have no weight field at
     // all, so validity for those means "reps filled in," not "weight AND
     // reps" — using the uniform weight+reps check here would silently
@@ -994,7 +1067,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         </div>
       </div>
 
-      <div style={{ fontSize:11, color:C.creamDim, marginBottom:10 }}>Next 4 days — tap one to log it, or reopen a logged day to edit.</div>
+      <div style={{ fontSize:11, color:C.creamDim, marginBottom:10 }}>Next 4 days — tap one to log it, use the arrows to swap two days, or reopen a logged day to edit.</div>
       {(() => {
         const planSpan = existingPlanLength();
         if (planSpan <= 4) return null; // 4 or fewer days is already fully visible in the list below — nothing extra to show
@@ -1006,7 +1079,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         );
       })()}
 
-      {next3.map(day => {
+      {next3.map((day, idx) => {
         const ac = day.def?.color || C.creamDim;
         // The last slot is always "Optional Day" — the date stays fixed,
         // but which day-type gets trained there is your call instead of
@@ -1017,6 +1090,8 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         // picker — you already made the call in advance, tapping the
         // card should open what you built, not ask you to pick again.
         const isOptionalSlot = day.i === 3 && !day.isDone && !day.isCustomPlanned;
+        const shuffleUp = canShuffle(day) && idx > 0 && canShuffle(next3[idx - 1]);
+        const shuffleDown = canShuffle(day) && idx < next3.length - 1 && canShuffle(next3[idx + 1]);
         return (
           <div key={day.i} className="ft-card" onClick={() => isOptionalSlot ? setOptionalDayPickerOpen(day) : openDay(day)} style={{
             padding:14, marginBottom:10, cursor:"pointer",
@@ -1025,7 +1100,14 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
             background: day.isDone ? "rgba(221,222,104,.06)" : "transparent",
           }}>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-              <div>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                {(shuffleUp || shuffleDown) && (
+                  <div style={{ display:"flex", flexDirection:"column", gap:1, flexShrink:0 }} onClick={e => e.stopPropagation()}>
+                    <button onClick={() => shuffleDay(idx, -1)} disabled={!shuffleUp} aria-label="Swap with the day above" title="Swap with the day above" style={{ background:"none", border:"none", color:C.creamDim, cursor: shuffleUp?"pointer":"default", opacity: shuffleUp?1:0.25, padding:2, minWidth:26, minHeight:20, display:"flex", alignItems:"center", justifyContent:"center" }}><ChevronUp size={14}/></button>
+                    <button onClick={() => shuffleDay(idx, 1)} disabled={!shuffleDown} aria-label="Swap with the day below" title="Swap with the day below" style={{ background:"none", border:"none", color:C.creamDim, cursor: shuffleDown?"pointer":"default", opacity: shuffleDown?1:0.25, padding:2, minWidth:26, minHeight:20, display:"flex", alignItems:"center", justifyContent:"center" }}><ChevronDown size={14}/></button>
+                  </div>
+                )}
+                <div>
                 <div style={{ fontSize:11, color: isOptionalSlot ? C.amber : (day.isToday ? ac : C.creamDim), fontWeight:700 }}>{day.isToday ? "TODAY · " : ""}{day.dateStr}</div>
                 {isOptionalSlot ? (
                   <>
@@ -1043,6 +1125,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                   </>
                 )}
                 {day.isDone && <div style={{ fontSize:10, color:C.lime, marginTop:2 }}>{day.dayType} Day completed · {day.dateStr} · {day.loggedSessions.length} exercise{day.loggedSessions.length!==1?"s":""}</div>}
+                </div>
               </div>
               {day.isDone ? (
                 <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>

@@ -51,6 +51,7 @@ import {
   Copy,
   AlertCircle,
   Maximize2,
+  Activity,
 } from "lucide-react";
 import UserSelect from "./components/UserSelect";
 import SplitDashboard from "./components/SplitDashboard";
@@ -72,6 +73,9 @@ import {
   loadMaxAttempts,
   insertMaxAttempt,
   deleteMaxAttempt,
+  loadRehabLogs,
+  insertRehabLog,
+  deleteRehabLog,
   loadCustomDayPlans,
   saveCustomDayPlan,
   deleteCustomDayPlan,
@@ -1340,6 +1344,7 @@ const NAV_GROUPS = [
       { key: "splitInfo", label: "Split Info", icon: <CalendarDays size={13} /> },
       { key: "setCoverage", label: "Set Coverage", icon: <Layers size={13} /> },
       { key: "maxTracker", label: "Big 3 Maxes", icon: <Trophy size={13} /> },
+      { key: "rehab", label: "Rehab", icon: <Activity size={13} />, feature: "rehab" },
     ],
   },
   { key: "trends", label: "Trending Progression", icon: <TrendingUp size={14} />, feature: "trends" },
@@ -1359,8 +1364,9 @@ const FEATURE_DEFS = [
   { key: "measurements", label: "Measurements", blurb: "Shoulders, arms, waist, and leg tracking" },
   { key: "train", label: "Strength Training", blurb: "Lifting splits, workout logging, progression suggestions" },
   { key: "trends", label: "Trending Progression", blurb: "Weight, body fat, calorie balance, and lift trends" },
+  { key: "rehab", label: "Rehab (left/right tracking)", blurb: "Free-form left vs. right side exercise logging, outside your split — off by default, only turn on if you're actually doing unilateral rehab work" },
 ];
-const DEFAULT_FEATURES = { weighin: true, water: true, food: true, measurements: true, train: true, trends: true };
+const DEFAULT_FEATURES = { weighin: true, water: true, food: true, measurements: true, train: true, trends: true, rehab: false };
 
 function loadFeatures(userId) {
   try {
@@ -1459,6 +1465,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   const [creatineInput, setCreatineInput] = useState("");
   const [workoutSessions, setWorkoutSessions] = useState([]);
   const [maxAttempts, setMaxAttempts] = useState([]);
+  const [rehabLogs, setRehabLogs] = useState([]);
   const [customDayPlans, setCustomDayPlans] = useState({});
   // Set of date strings marked "worked out" with no exercise data — see
   // storage.js for why this is deliberately separate from workoutSessions.
@@ -1479,11 +1486,11 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
   useEffect(() => {
     (async () => {
-      const [p, e, ws, splitId, splitStart, ma, cdp, cst, wa] = await Promise.all([
+      const [p, e, ws, splitId, splitStart, ma, cdp, cst, wa, rl] = await Promise.all([
         loadProfile(userId), loadEntries(userId),
         loadWorkoutSessions(userId), getUserSplitId(userId), getUserSplitStartedOn(userId),
         loadMaxAttempts(userId), loadCustomDayPlans(userId), loadCustomSplitTemplates(userId),
-        loadWorkoutAttendance(userId),
+        loadWorkoutAttendance(userId), loadRehabLogs(userId),
       ]);
       setProfile(p);
       setEntries(e);
@@ -1494,6 +1501,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       setCustomDayPlans(cdp);
       setCustomSplitTemplates(cst);
       setWorkoutAttendance(wa);
+      setRehabLogs(rl);
       setLoaded(true);
     })();
   }, [userId]);
@@ -2264,6 +2272,8 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       {tab === "setCoverage" && <SetCoverageTab workoutSessions={workoutSessions} profile={profile} onProfileChange={handleProfileChange} />}
 
       {tab === "maxTracker" && <MaxTrackerTab userId={userId} maxAttempts={maxAttempts} setMaxAttempts={setMaxAttempts} latestWeight={latestEntry?.weight ?? null} gender={profile.gender} profile={profile} onProfileChange={handleProfileChange} />}
+
+      {tab === "rehab" && <RehabTab userId={userId} rehabLogs={rehabLogs} setRehabLogs={setRehabLogs} />}
 
       {tab === "trends" && <Trends chartData={chartData} workoutSessions={workoutSessions} showLifts={features.train} showWater={features.water} profile={profile} />}
 
@@ -4864,6 +4874,177 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gend
   );
 }
 
+// Four unilateral sides, deliberately not tied to any split/muscle-group
+// taxonomy — this tab exists specifically for rehab tracking that sits
+// outside normal split logic (see splits.js's per-group exercise pools,
+// which this intentionally does NOT use; the exercise name here is
+// whatever the person types).
+const REHAB_SIDES = ["Left Leg", "Right Leg", "Left Arm", "Right Arm"];
+
+function RehabTab({ userId, rehabLogs, setRehabLogs }) {
+  const [side, setSide] = useState(REHAB_SIDES[0]);
+  const [exercise, setExercise] = useState("");
+  const [dateInput, setDateInput] = useState(todayStr());
+  const [draftSets, setDraftSets] = useState([{ w: "", r: "" }]);
+  const [saving, setSaving] = useState(false);
+
+  // Previously-used exercise names, offered via a datalist — doesn't
+  // restrict what can be typed (the whole point is an open exercise
+  // bank), just makes reusing the exact same name easier than retyping
+  // it slightly differently each time, which matters for the left/right
+  // comparison below since it matches on exact exercise name.
+  const knownExercises = useMemo(() => {
+    return Array.from(new Set(rehabLogs.map(l => l.exercise))).sort();
+  }, [rehabLogs]);
+
+  function updateSetRow(i, field, value) {
+    setDraftSets(prev => prev.map((s, idx) => idx === i ? { ...s, [field]: value } : s));
+  }
+  function addSetRow() {
+    setDraftSets(prev => [...prev, { w: "", r: "" }]);
+  }
+  function removeSetRow(i) {
+    setDraftSets(prev => prev.length <= 1 ? prev : prev.filter((_, idx) => idx !== i));
+  }
+
+  async function handleSave() {
+    const name = exercise.trim();
+    const sets = draftSets
+      .filter(s => parseFloat(s.w) > 0 && parseInt(s.r) > 0)
+      .map(s => ({ weight: parseFloat(s.w), reps: parseInt(s.r) }));
+    if (!name || sets.length === 0) {
+      toastError("Enter an exercise name and at least one complete set (weight + reps) before saving.");
+      return;
+    }
+    setSaving(true);
+    const saved = await insertRehabLog(userId, { date: dateInput, side, exercise: name, sets });
+    setSaving(false);
+    if (!saved) return;
+    setRehabLogs(prev => [...prev, saved]);
+    setDraftSets([{ w: "", r: "" }]);
+    toastSuccess("Logged");
+  }
+
+  async function removeLog(id) {
+    setRehabLogs(prev => prev.filter(l => l.id !== id));
+    await deleteRehabLog(userId, id);
+  }
+
+  function bestSet(sets) {
+    if (!sets || sets.length === 0) return null;
+    return sets.reduce((best, s) => (s.reps > (best?.reps ?? -1) ? s : best), null);
+  }
+  function limbOf(s) {
+    return s.endsWith("Leg") ? "Leg" : "Arm";
+  }
+
+  // Grouped by exercise name, newest first within each group. Same-date
+  // Left/Right pairs (matched by limb — Leg with Leg, Arm with Arm) get
+  // a computed Limb Symmetry Index: (weaker side's best-set reps ÷
+  // stronger side's best-set reps) × 100, the same metric discussed for
+  // tracking ACL rehab progress. Only shown when both sides used the
+  // SAME weight — reps at different loads aren't a meaningful
+  // comparison, and showing a volume-based substitute would present a
+  // mismatched-weight comparison as more precise than it really is.
+  const grouped = useMemo(() => {
+    const byExercise = {};
+    for (const log of rehabLogs) (byExercise[log.exercise] ||= []).push(log);
+    return Object.entries(byExercise)
+      .map(([name, logs]) => ({ name, logs: [...logs].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [rehabLogs]);
+
+  return (
+    <div>
+      <div className="ft-card" style={{ padding: 18, marginBottom: 14 }}>
+        <div className="ft-label" style={{ marginBottom: 4 }}>Log a rehab set</div>
+        <div style={{ fontSize: 11.5, color: COLORS.creamDim, marginBottom: 12, lineHeight: 1.4 }}>
+          Free-form — any exercise, not tied to your split. Use the exact same exercise name on both sides to see a left/right comparison below.
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+          {REHAB_SIDES.map(s => (
+            <button key={s} onClick={() => setSide(s)} className={s === side ? "ft-btn ft-btn-primary" : "ft-btn ft-btn-ghost"} style={{ fontSize: 11.5, padding: "6px 12px" }}>
+              {s}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          <input
+            className="ft-input" list="rehab-exercise-list"
+            placeholder="Exercise (e.g. Leg Extension)"
+            value={exercise} onChange={(e) => setExercise(e.target.value)}
+            style={{ flex: "1 1 200px" }}
+          />
+          <datalist id="rehab-exercise-list">
+            {knownExercises.map((name) => <option key={name} value={name} />)}
+          </datalist>
+          <input className="ft-input" type="date" value={dateInput} onChange={(e) => setDateInput(e.target.value)} style={{ flex: "0 1 150px" }} />
+        </div>
+
+        {draftSets.map((s, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+            <input className="ft-input" type="number" inputMode="decimal" placeholder="Weight (lbs)" value={s.w} onChange={(e) => updateSetRow(i, "w", e.target.value)} onFocus={(e) => e.target.select()} style={{ flex: 1 }} />
+            <input className="ft-input" type="number" inputMode="numeric" placeholder="Reps" value={s.r} onChange={(e) => updateSetRow(i, "r", e.target.value)} onFocus={(e) => e.target.select()} style={{ flex: 1 }} />
+            {draftSets.length > 1 && (
+              <button onClick={() => removeSetRow(i)} style={{ background: "none", border: "none", color: COLORS.creamDim, cursor: "pointer", padding: 4 }}><X size={14} /></button>
+            )}
+          </div>
+        ))}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <button className="ft-btn ft-btn-ghost" onClick={addSetRow} style={{ fontSize: 11.5 }}><Plus size={12} /> Add set</button>
+          <button className="ft-btn ft-btn-primary" disabled={saving} onClick={handleSave} style={{ marginLeft: "auto" }}>{saving ? "Saving…" : "Save"}</button>
+        </div>
+      </div>
+
+      {grouped.length === 0 ? (
+        <div className="ft-card" style={{ padding: 30, textAlign: "center", color: COLORS.creamDim }}>Nothing logged yet.</div>
+      ) : (
+        grouped.map(({ name, logs }) => {
+          const byDate = {};
+          for (const log of logs) (byDate[log.date] ||= []).push(log);
+          return (
+            <div key={name} className="ft-card" style={{ padding: 16, marginBottom: 12 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: COLORS.cream, marginBottom: 10 }}>{name}</div>
+              {logs.map((log) => {
+                const best = bestSet(log.sets);
+                const opposite = (byDate[log.date] || []).find((l) => l.id !== log.id && limbOf(l.side) === limbOf(log.side) && l.side !== log.side);
+                let lsiNote = null;
+                if (opposite && log.side < opposite.side) { // render each pair's note once, on whichever side sorts first
+                  const oppBest = bestSet(opposite.sets);
+                  if (best && oppBest && best.weight === oppBest.weight) {
+                    const weaker = best.reps <= oppBest.reps ? { side: log.side, ...best } : { side: opposite.side, ...oppBest };
+                    const stronger = best.reps > oppBest.reps ? { side: log.side, ...best } : { side: opposite.side, ...oppBest };
+                    const lsi = Math.round((weaker.reps / stronger.reps) * 100);
+                    lsiNote = `${weaker.side} at ${lsi}% of ${stronger.side} (same ${fmt(weaker.weight)} lbs — ${weaker.reps} vs ${stronger.reps} reps)`;
+                  }
+                }
+                return (
+                  <div key={log.id}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${COLORS.border}` }}>
+                      <div>
+                        <span style={{ fontSize: 12, color: COLORS.cream, fontWeight: 600 }}>{log.side}</span>
+                        <span style={{ fontSize: 11, color: COLORS.creamDim, marginLeft: 8 }}>{prettyDate(log.date)}</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span className="ft-mono" style={{ fontSize: 12, color: COLORS.creamDim }}>{log.sets.map(formatSetDetail).join(", ")}</span>
+                        <button onClick={() => removeLog(log.id)} style={{ background: "none", border: "none", color: COLORS.creamDim, cursor: "pointer", padding: 2 }}><Trash2 size={12} /></button>
+                      </div>
+                    </div>
+                    {lsiNote && <div style={{ fontSize: 10.5, color: COLORS.ember, padding: "2px 0 6px" }}>{lsiNote}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
 function SetCoverageTab({ workoutSessions, profile, onProfileChange }) {
   const coverage = useMemo(() => computeSetCoverageDetailed(workoutSessions, ANATOMICAL_GROUPS), [workoutSessions]);
   // Whether ANYTHING has been logged this window — deliberately checked
@@ -6370,6 +6551,17 @@ function MeasurementsTab({ selectedDate, setSelectedDate, measurementsInput, set
         ? String(Math.max(0, Math.round((parseFloat(raw) / 2.54) * 100) / 100))
         : String(Math.max(0, parseFloat(raw) || 0));
     });
+    // Nothing entered — this used to fall straight through to onSave({})
+    // and still show "Measurements saved", exactly as if a real
+    // measurement had gone in. That false-positive confirmation is the
+    // likely explanation for a real report of a day's measurements
+    // "confirmed empty in Supabase" despite believing they'd been saved
+    // — same class of silent-empty-save bug as syncBlocksToDb's
+    // hasAnyValidSet gate above was written to prevent for workouts.
+    if (Object.keys(stored).length === 0) {
+      toastError("Enter at least one measurement before saving.");
+      return;
+    }
     setSaving(true);
     try {
       await onSave(stored);

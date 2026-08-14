@@ -608,6 +608,90 @@ export async function deleteMaxAttempt(userId, id) {
   }
 }
 
+function rehabLogFromRow(row) {
+  return {
+    id: row.id,
+    date: row.date,
+    side: row.side,
+    exercise: row.exercise,
+    sets: row.sets || [],
+  };
+}
+
+// Free-form left/right tracking (Rehab tab) — deliberately NOT tied to a
+// split, a split day, or the curated exercise pool in splits.js, since
+// the whole point is logging whatever the person's rehab program has
+// them doing, exercise name typed freely. Same cache-first / optimistic
+// / offline-queue-on-failure pattern as everywhere else in this file.
+export async function loadRehabLogs(userId) {
+  if (!userId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("rehab_logs")
+      .select("*")
+      .eq("user_id", userId)
+      .order("date")
+      .order("created_at");
+    if (error) throw error;
+    const logs = (data || []).map(rehabLogFromRow);
+    writeCache("rehabLogs", userId, logs);
+    return logs;
+  } catch (e) {
+    console.error("loadRehabLogs failed, using cache:", e);
+    return readCache("rehabLogs", userId, []);
+  }
+}
+
+export async function insertRehabLog(userId, log) {
+  if (!userId) return null;
+  const row = {
+    id: newId(),
+    user_id: userId,
+    date: log.date,
+    side: log.side,
+    exercise: log.exercise,
+    sets: log.sets || [],
+  };
+  const optimistic = rehabLogFromRow(row);
+  const cached = readCache("rehabLogs", userId, []);
+  writeCache("rehabLogs", userId, [...cached, optimistic]);
+
+  if (!isOnline()) {
+    enqueueOp("insertRehabLogRaw", [row]);
+    return optimistic;
+  }
+  try {
+    const { error } = await supabase.from("rehab_logs").insert(row);
+    if (error) throw error;
+    return optimistic;
+  } catch (e) {
+    console.error("insertRehabLog failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("insertRehabLogRaw", [row]);
+    return optimistic;
+  }
+}
+
+export async function deleteRehabLog(userId, id) {
+  if (!userId) return;
+
+  const cached = readCache("rehabLogs", userId, []);
+  writeCache("rehabLogs", userId, cached.filter((l) => l.id !== id));
+
+  if (!isOnline()) {
+    enqueueOp("deleteRehabLog", [userId, id]);
+    return;
+  }
+  try {
+    const { error } = await supabase.from("rehab_logs").delete().eq("user_id", userId).eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    console.error("deleteRehabLog failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("deleteRehabLog", [userId, id]);
+  }
+}
+
 function customDayPlanFromRow(row) {
   return {
     date: row.date,
@@ -1213,6 +1297,14 @@ export const offlineExecutors = {
   },
   deleteMaxAttempt: async (userId, id) => {
     const { error } = await supabase.from("max_attempts").delete().eq("user_id", userId).eq("id", id);
+    if (error) throw error;
+  },
+  insertRehabLogRaw: async (row) => {
+    const { error } = await supabase.from("rehab_logs").insert(row);
+    if (error) throw error;
+  },
+  deleteRehabLog: async (userId, id) => {
+    const { error } = await supabase.from("rehab_logs").delete().eq("user_id", userId).eq("id", id);
     if (error) throw error;
   },
   saveCustomDayPlanRaw: async (row) => {
