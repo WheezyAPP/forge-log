@@ -777,6 +777,76 @@ export async function deleteCustomDayPlan(userId, date) {
   }
 }
 
+// ---------- Calorie overrides ----------
+// A per-date custom "Suggested calories" that overrides the normal
+// profile-formula number for that specific day — e.g. a hand-planned
+// cut schedule. Same {date: value} map shape and upsert-on-date pattern
+// as custom_day_plans above. Not yet exposed as its own Settings
+// editor — for now these get written directly; when no override exists
+// for a date, callers fall back to the formula exactly as before.
+export async function loadCalorieOverrides(userId) {
+  if (!userId) return {};
+  try {
+    const { data, error } = await supabase
+      .from("calorie_overrides")
+      .select("*")
+      .eq("user_id", userId)
+      .order("date");
+    if (error) throw error;
+    const map = {};
+    for (const row of data || []) map[row.date] = parseFloat(row.calories);
+    writeCache("calorieOverrides", userId, map);
+    return map;
+  } catch (e) {
+    console.error("loadCalorieOverrides failed, using cache:", e);
+    return readCache("calorieOverrides", userId, {});
+  }
+}
+
+export async function saveCalorieOverride(userId, date, calories) {
+  if (!userId) return null;
+  const row = { user_id: userId, date, calories };
+  const cached = readCache("calorieOverrides", userId, {});
+  writeCache("calorieOverrides", userId, { ...cached, [date]: calories });
+
+  if (!isOnline()) {
+    enqueueOp("saveCalorieOverrideRaw", [row]);
+    return calories;
+  }
+  try {
+    const { error } = await supabase.from("calorie_overrides").upsert(row, { onConflict: "user_id,date" });
+    if (error) throw error;
+    return calories;
+  } catch (e) {
+    console.error("saveCalorieOverride failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("saveCalorieOverrideRaw", [row]);
+    return calories;
+  }
+}
+
+export async function deleteCalorieOverride(userId, date) {
+  if (!userId) return;
+
+  const cached = readCache("calorieOverrides", userId, {});
+  const next = { ...cached };
+  delete next[date];
+  writeCache("calorieOverrides", userId, next);
+
+  if (!isOnline()) {
+    enqueueOp("deleteCalorieOverride", [userId, date]);
+    return;
+  }
+  try {
+    const { error } = await supabase.from("calorie_overrides").delete().eq("user_id", userId).eq("date", date);
+    if (error) throw error;
+  } catch (e) {
+    console.error("deleteCalorieOverride failed, queuing for retry:", e);
+    toastError("Couldn't save — we'll keep retrying in the background.");
+    enqueueOp("deleteCalorieOverride", [userId, date]);
+  }
+}
+
 // ---------- Workout attendance ----------
 // Backfilling "I worked out this day" for days logged before someone
 // started using the app (or just forgot to log in the moment) —
@@ -1309,6 +1379,14 @@ export const offlineExecutors = {
   },
   saveCustomDayPlanRaw: async (row) => {
     const { error } = await supabase.from("custom_day_plans").upsert(row, { onConflict: "user_id,date" });
+    if (error) throw error;
+  },
+  saveCalorieOverrideRaw: async (row) => {
+    const { error } = await supabase.from("calorie_overrides").upsert(row, { onConflict: "user_id,date" });
+    if (error) throw error;
+  },
+  deleteCalorieOverride: async (userId, date) => {
+    const { error } = await supabase.from("calorie_overrides").delete().eq("user_id", userId).eq("date", date);
     if (error) throw error;
   },
   deleteCustomDayPlan: async (userId, date) => {

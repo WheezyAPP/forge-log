@@ -79,6 +79,9 @@ import {
   loadCustomDayPlans,
   saveCustomDayPlan,
   deleteCustomDayPlan,
+  loadCalorieOverrides,
+  saveCalorieOverride,
+  deleteCalorieOverride,
   loadWorkoutAttendance,
   markWorkoutAttendance,
   unmarkWorkoutAttendance,
@@ -815,7 +818,14 @@ function computeStats(profile, weightLbs, measurements = {}) {
   if (profile.goalType === "lose") dailyCalorieAdjustment = -(rate * energyDensityFor(profile.goalType)) / 7;
   else if (profile.goalType === "gain") dailyCalorieAdjustment = (rate * energyDensityFor(profile.goalType)) / 7;
   else if (profile.goalType === "mini_cut") dailyCalorieAdjustment = -tdee * 0.25;
-  const suggestedCalories = tdee + dailyCalorieAdjustment;
+  // A calorie_overrides entry for this specific date (a hand-planned
+  // number for a stretch of days) takes priority over the formula
+  // above when present — dailyCalorieAdjustment is recomputed to match
+  // it so anything reading that field for display stays consistent
+  // with what's actually being suggested.
+  const formulaSuggestedCalories = tdee + dailyCalorieAdjustment;
+  const suggestedCalories = measurements.calorieOverride != null ? measurements.calorieOverride : formulaSuggestedCalories;
+  if (measurements.calorieOverride != null) dailyCalorieAdjustment = suggestedCalories - tdee;
 
   // Macro targets, built from the INTAKE TARGET (suggested calories), not
   // maintenance — otherwise carb targets overshoot on a cut and undershoot
@@ -843,6 +853,7 @@ function computeStats(profile, weightLbs, measurements = {}) {
     navyEligible,
     fatLbs,
     leanLbs,
+    formulaSuggestedCalories,
     dailyCalorieAdjustment,
     suggestedCalories,
   };
@@ -1467,6 +1478,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   const [maxAttempts, setMaxAttempts] = useState([]);
   const [rehabLogs, setRehabLogs] = useState([]);
   const [customDayPlans, setCustomDayPlans] = useState({});
+  const [calorieOverrides, setCalorieOverrides] = useState({});
   // Set of date strings marked "worked out" with no exercise data — see
   // storage.js for why this is deliberately separate from workoutSessions.
   const [workoutAttendance, setWorkoutAttendance] = useState(new Set());
@@ -1486,11 +1498,11 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
   useEffect(() => {
     (async () => {
-      const [p, e, ws, splitId, splitStart, ma, cdp, cst, wa, rl] = await Promise.all([
+      const [p, e, ws, splitId, splitStart, ma, cdp, cst, wa, rl, co] = await Promise.all([
         loadProfile(userId), loadEntries(userId),
         loadWorkoutSessions(userId), getUserSplitId(userId), getUserSplitStartedOn(userId),
         loadMaxAttempts(userId), loadCustomDayPlans(userId), loadCustomSplitTemplates(userId),
-        loadWorkoutAttendance(userId), loadRehabLogs(userId),
+        loadWorkoutAttendance(userId), loadRehabLogs(userId), loadCalorieOverrides(userId),
       ]);
       setProfile(p);
       setEntries(e);
@@ -1502,6 +1514,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       setCustomSplitTemplates(cst);
       setWorkoutAttendance(wa);
       setRehabLogs(rl);
+      setCalorieOverrides(co);
       setLoaded(true);
     })();
   }, [userId]);
@@ -1558,8 +1571,8 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
   const liveWeight = parseFloat(weightInput) || latestEntry?.weight || FALLBACK_WEIGHT_ESTIMATE_LBS;
   const liveStats = useMemo(
-    () => computeStats(profile, liveWeight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist") }),
-    [profile, liveWeight, entries]
+    () => computeStats(profile, liveWeight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist"), calorieOverride: calorieOverrides[selectedDate] }),
+    [profile, liveWeight, entries, calorieOverrides, selectedDate]
   );
   const liveConsumed = parseFloat(caloriesInput) || 0;
   const liveBalance = liveConsumed - liveStats.tdee;
@@ -1666,7 +1679,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       return;
     }
     const weight = clampPositive(weightInput);
-    const stats = computeStats(profile, weight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist") });
+    const stats = computeStats(profile, weight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist"), calorieOverride: calorieOverrides[selectedDate] });
     const merged = await mergeAndSaveEntry(selectedDate, {
       weight,
       caloriesConsumed: clampPositive(caloriesInput),
@@ -1910,7 +1923,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   const chartData = useMemo(() => {
     return sortedDates.map((d) => {
       const e = entries[d];
-      const stats = computeStats(profile, e.weight);
+      const stats = computeStats(profile, e.weight, { calorieOverride: calorieOverrides[d] });
       return {
         date: d,
         label: prettyDate(d).split(",")[0] + " " + d.slice(8),
@@ -1925,7 +1938,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
         waterGoalOz: Math.round(computeWaterGoalOz(profile, e.weight, (e.creatine || 0) > 0, computeCreatineSaturation(entries, 28, profile.creatineAlreadySaturated, d).pct)),
       };
     });
-  }, [entries, profile, sortedDates]);
+  }, [entries, profile, sortedDates, calorieOverrides]);
 
   // Which top-level nav group the current tab belongs to (drives both the
   // primary row's highlight and whether a secondary sub-tab row shows).
@@ -2127,6 +2140,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
           features={features}
           setTab={setTab}
           userId={userId}
+          calorieOverrides={calorieOverrides}
         />
       )}
 
@@ -2712,7 +2726,7 @@ function OnboardingBanner({ userId, setTab }) {
   );
 }
 
-function Dashboard({ entries, sortedDates, latestDate, profile, chartData, workoutSessions, userSplitId, splitStartedOn, features, setTab, userId }) {
+function Dashboard({ entries, sortedDates, latestDate, profile, chartData, workoutSessions, userSplitId, splitStartedOn, features, setTab, userId, calorieOverrides }) {
   if (!latestDate) {
     return (
       <div>
@@ -2726,7 +2740,7 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
     );
   }
   const e = entries[latestDate];
-  const stats = computeStats(profile, e.weight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist") });
+  const stats = computeStats(profile, e.weight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist"), calorieOverride: calorieOverrides?.[latestDate] });
   const balance = e.caloriesConsumed - stats.tdee;
   const proteinPct = Math.min(100, (e.protein / stats.proteinG) * 100 || 0);
   const loggingStreak = computeLoggingStreak(entries);
@@ -4937,6 +4951,35 @@ function RehabTab({ userId, rehabLogs, setRehabLogs }) {
   function limbOf(s) {
     return s.endsWith("Leg") ? "Leg" : "Arm";
   }
+  // Same-weight comparison between a pair of logs — shared by both the
+  // prominent "today's comparison" card and the history view below, so
+  // the two never disagree with each other.
+  function computeLsi(a, b) {
+    const aBest = bestSet(a.sets), bBest = bestSet(b.sets);
+    if (!aBest || !bBest || aBest.weight !== bBest.weight) return null;
+    const weaker = aBest.reps <= bBest.reps ? { side: a.side, ...aBest } : { side: b.side, ...bBest };
+    const stronger = aBest.reps > bBest.reps ? { side: a.side, ...aBest } : { side: b.side, ...bBest };
+    const lsi = Math.round((weaker.reps / stronger.reps) * 100);
+    return `${weaker.side} at ${lsi}% of ${stronger.side} (same ${fmt(weaker.weight)} lbs — ${weaker.reps} vs ${stronger.reps} reps)`;
+  }
+
+  // Every complete Left/Right pair logged on the currently-selected
+  // date — surfaced immediately, right where the weight and reps get
+  // entered, instead of making it something you have to go find in the
+  // history below. Matched by exact exercise name AND limb (Leg with
+  // Leg, Arm with Arm), same as the history view's pairing logic.
+  const todaysComparisons = useMemo(() => {
+    const onDate = rehabLogs.filter((l) => l.date === dateInput);
+    const out = [];
+    for (const log of onDate) {
+      const opposite = onDate.find((l) => l.id !== log.id && l.exercise === log.exercise && limbOf(l.side) === limbOf(log.side) && l.side !== log.side);
+      if (opposite && log.side < opposite.side) { // once per pair
+        const note = computeLsi(log, opposite);
+        if (note) out.push({ exercise: log.exercise, note });
+      }
+    }
+    return out;
+  }, [rehabLogs, dateInput]);
 
   // Grouped by exercise name, newest first within each group. Same-date
   // Left/Right pairs (matched by limb — Leg with Leg, Arm with Arm) get
@@ -4999,6 +5042,18 @@ function RehabTab({ userId, rehabLogs, setRehabLogs }) {
         </div>
       </div>
 
+      {todaysComparisons.length > 0 && (
+        <div className="ft-card" style={{ padding: 16, marginBottom: 14, borderColor: COLORS.ember }}>
+          <div className="ft-label" style={{ marginBottom: 8, color: COLORS.ember }}>Left/Right comparison — {prettyDate(dateInput)}</div>
+          {todaysComparisons.map(({ exercise: name, note }) => (
+            <div key={name} style={{ fontSize: 12.5, color: COLORS.cream, padding: "4px 0" }}>
+              <span style={{ fontWeight: 600 }}>{name}: </span>
+              <span style={{ color: COLORS.creamDim }}>{note}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {grouped.length === 0 ? (
         <div className="ft-card" style={{ padding: 30, textAlign: "center", color: COLORS.creamDim }}>Nothing logged yet.</div>
       ) : (
@@ -5009,18 +5064,8 @@ function RehabTab({ userId, rehabLogs, setRehabLogs }) {
             <div key={name} className="ft-card" style={{ padding: 16, marginBottom: 12 }}>
               <div style={{ fontSize: 13.5, fontWeight: 700, color: COLORS.cream, marginBottom: 10 }}>{name}</div>
               {logs.map((log) => {
-                const best = bestSet(log.sets);
                 const opposite = (byDate[log.date] || []).find((l) => l.id !== log.id && limbOf(l.side) === limbOf(log.side) && l.side !== log.side);
-                let lsiNote = null;
-                if (opposite && log.side < opposite.side) { // render each pair's note once, on whichever side sorts first
-                  const oppBest = bestSet(opposite.sets);
-                  if (best && oppBest && best.weight === oppBest.weight) {
-                    const weaker = best.reps <= oppBest.reps ? { side: log.side, ...best } : { side: opposite.side, ...oppBest };
-                    const stronger = best.reps > oppBest.reps ? { side: log.side, ...best } : { side: opposite.side, ...oppBest };
-                    const lsi = Math.round((weaker.reps / stronger.reps) * 100);
-                    lsiNote = `${weaker.side} at ${lsi}% of ${stronger.side} (same ${fmt(weaker.weight)} lbs — ${weaker.reps} vs ${stronger.reps} reps)`;
-                  }
-                }
+                const lsiNote = (opposite && log.side < opposite.side) ? computeLsi(log, opposite) : null;
                 return (
                   <div key={log.id}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${COLORS.border}` }}>
