@@ -27,7 +27,7 @@ export const EX = {
   },
   "Lats": {
     primary:   ["Pull-Ups"],
-    compound:  ["Lat Pulldowns","Barbell Rows","Yates Rows","Dumbbell Rows","Meadows Rows","Close-Grip Lat Pulldowns","Seated Cable Rows","Single-Arm Cable Rows","Wide-Grip Pull-Ups","Assisted Pull-Up","Half-Kneeling 1-Arm Lat Pulldown","Lean-Back Lat Pulldown","Lean-Back Machine Pulldown","Machine Pulldown","Medium-Grip Pull-Up","Neutral-Grip Lat Pulldown","Neutral-Grip Pull-Up","Overhand Lat Pulldown","Wide-Grip Band-Assisted Pull-Up","Wide-Grip Lat Pulldown","Dual-Handle Lat Pulldown (Mid-back + Lats)","Iso-Lateral High Row","Iso-Lateral Low Row"],
+    compound:  ["Lat Pulldowns","Barbell Rows","Yates Rows","Dumbbell Rows","Meadows Rows","Close-Grip Lat Pulldowns","Seated Cable Rows","Single-Arm Cable Rows","Wide-Grip Pull-Ups","Assisted Pull-Up","Weighted Pull-Ups","Half-Kneeling 1-Arm Lat Pulldown","Lean-Back Lat Pulldown","Lean-Back Machine Pulldown","Machine Pulldown","Medium-Grip Pull-Up","Neutral-Grip Lat Pulldown","Neutral-Grip Pull-Up","Overhand Lat Pulldown","Wide-Grip Band-Assisted Pull-Up","Wide-Grip Lat Pulldown","Dual-Handle Lat Pulldown (Mid-back + Lats)","Iso-Lateral High Row","Iso-Lateral Low Row"],
     isolation: ["Straight-Arm Lat Pulldowns","1-Arm Lat Pull-In","Cross-Body Lat Pull-Around","DB Lat Pullover","Machine Lat Pullover","Straight-Bar Lat Prayer"],
   },
   "Rhomboids & Upper Back": {

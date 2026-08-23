@@ -15,6 +15,20 @@
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <link rel="icon" href="/icon-192.png" />
     <meta name="description" content="Forge Log — personal macro, calorie, and workout tracker." />
+
+    <!-- Inter / JetBrains Mono — loaded as real <link> tags in the static
+         HTML rather than a CSS @import inside the dynamically-injected
+         GlobalStyle <style> tag. That combination (PWA standalone mode +
+         service worker + a cross-origin @import buried inside a
+         JS-injected style block, instead of present at initial page
+         parse) is a known unreliable way to load a webfont — when it
+         silently fails, the browser falls back to the system sans-serif
+         with no error, which looks exactly like "the font changed" even
+         though the CSS itself never did. Real <link> tags get picked up
+         by the browser's preload scanner immediately, before any JS runs. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
   </head>
   <body style="margin:0; background:#212230;">
     <div id="root"></div>

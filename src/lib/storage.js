@@ -163,6 +163,15 @@ const DEFAULT_PROFILE = {
   // { squat: 335, bench: 245, deadlift: null } — feeds the warm-up
   // pyramid plan on the Big 3 Maxes tab.
   maxDayGoals: null,
+  // Opt-in alternative to mini_cut's flat 25%-below-TDEE rule — a
+  // specific %-of-bodyweight-per-week rate instead, with an optional
+  // taper to a gentler rate once weight crosses a threshold (protects
+  // muscle as a cut gets deeper into a leaner bodyweight). Null for
+  // everyone by default; mini_cut's normal flat-25% math is completely
+  // unaffected unless this is explicitly set.
+  customLossRatePct: null,
+  customLossRateTaperWeight: null,
+  customLossRateTaperedPct: null,
 };
 
 function profileFromRow(row) {
@@ -200,6 +209,9 @@ function profileFromRow(row) {
     setCoverageTargets: row.set_coverage_targets ?? null,
     dedicatedProgressiveOverload: row.dedicated_progressive_overload ?? false,
     maxDayGoals: row.max_day_goals ?? null,
+    customLossRatePct: row.custom_loss_rate_pct ?? null,
+    customLossRateTaperWeight: row.custom_loss_rate_taper_weight ?? null,
+    customLossRateTaperedPct: row.custom_loss_rate_tapered_pct ?? null,
   };
 }
 
@@ -228,6 +240,9 @@ function profileToRow(userId, profile) {
     set_coverage_targets: profile.setCoverageTargets ?? null,
     dedicated_progressive_overload: profile.dedicatedProgressiveOverload ?? false,
     max_day_goals: profile.maxDayGoals ?? null,
+    custom_loss_rate_pct: profile.customLossRatePct ?? null,
+    custom_loss_rate_taper_weight: profile.customLossRateTaperWeight ?? null,
+    custom_loss_rate_tapered_pct: profile.customLossRateTaperedPct ?? null,
   };
 }
 
@@ -618,11 +633,14 @@ function rehabLogFromRow(row) {
   };
 }
 
-// Free-form left/right tracking (Rehab tab) — deliberately NOT tied to a
-// split, a split day, or the curated exercise pool in splits.js, since
-// the whole point is logging whatever the person's rehab program has
-// them doing, exercise name typed freely. Same cache-first / optimistic
-// / offline-queue-on-failure pattern as everywhere else in this file.
+// Free-form left/right tracking (Balancing Chart tab — DB table and
+// internal names still say "rehab", since that's what this table/these
+// functions were originally built as; only the user-facing label
+// changed) — deliberately NOT tied to a split, a split day, or the
+// curated exercise pool in splits.js, since the whole point is logging
+// whatever the person's balance-check work has them doing, exercise
+// name typed freely. Same cache-first / optimistic / offline-queue-on-
+// failure pattern as everywhere else in this file.
 export async function loadRehabLogs(userId) {
   if (!userId) return [];
   try {

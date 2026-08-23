@@ -811,13 +811,34 @@ function computeStats(profile, weightLbs, measurements = {}) {
   // Suggested calories from the goal.
   // "lose"/"gain": rate-based (lbs/week × goal-direction energy density
   // — see ENERGY_DENSITY_PER_LB for why this isn't a flat 3500 anymore).
-  // "mini_cut": a 25% deficit below TDEE — the middle of the 20-30% range
-  // commonly recommended for a short (2-6 week), high-adherence cut.
+  // "mini_cut": a 25% deficit below TDEE by default — the middle of the
+  // 20-30% range commonly recommended for a short (2-6 week),
+  // high-adherence cut — UNLESS customLossRatePct is set on the profile,
+  // in which case that %-of-bodyweight-per-week rate drives the deficit
+  // instead (with an optional taper to customLossRateTaperedPct once
+  // weight crosses customLossRateTaperWeight, for protecting muscle as
+  // the cut gets deeper into a leaner bodyweight). This recalculates
+  // fresh on every call using whatever weightLbs/tdee are passed in —
+  // both already reflect the CURRENT adaptive TDEE and CURRENT logged
+  // weight wherever computeStats gets called — so "Suggested calories"
+  // self-corrects automatically as either changes, with no need to
+  // hand-update a stored number every time the TDEE estimate shifts.
   const rate = profile.goalRateLbsPerWeek || 0;
   let dailyCalorieAdjustment = 0;
   if (profile.goalType === "lose") dailyCalorieAdjustment = -(rate * energyDensityFor(profile.goalType)) / 7;
   else if (profile.goalType === "gain") dailyCalorieAdjustment = (rate * energyDensityFor(profile.goalType)) / 7;
-  else if (profile.goalType === "mini_cut") dailyCalorieAdjustment = -tdee * 0.25;
+  else if (profile.goalType === "mini_cut") {
+    if (profile.customLossRatePct != null) {
+      const useTaper = profile.customLossRateTaperWeight != null
+        && weightLbs <= profile.customLossRateTaperWeight
+        && profile.customLossRateTaperedPct != null;
+      const ratePct = useTaper ? profile.customLossRateTaperedPct : profile.customLossRatePct;
+      const weeklyLossLbs = weightLbs * ratePct;
+      dailyCalorieAdjustment = -(weeklyLossLbs * energyDensityFor(profile.goalType)) / 7;
+    } else {
+      dailyCalorieAdjustment = -tdee * 0.25;
+    }
+  }
   // A calorie_overrides entry for this specific date (a hand-planned
   // number for a stretch of days) takes priority over the formula
   // above when present — dailyCalorieAdjustment is recomputed to match
@@ -1042,7 +1063,8 @@ const GRAD_GLOW = `linear-gradient(160deg, rgba(79,173,255,0.22), rgba(43,230,16
 
 const GlobalStyle = () => (
   <style>{`
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+    /* Inter / JetBrains Mono are loaded via <link> tags in index.html's
+       <head> now, not an @import here — see the comment there for why. */
 
     /* ── Design tokens ─────────────────────────────────────────────
        A small, deliberately short list — reused everywhere instead of
@@ -1355,7 +1377,7 @@ const NAV_GROUPS = [
       { key: "splitInfo", label: "Split Info", icon: <CalendarDays size={13} /> },
       { key: "setCoverage", label: "Set Coverage", icon: <Layers size={13} /> },
       { key: "maxTracker", label: "Big 3 Maxes", icon: <Trophy size={13} /> },
-      { key: "rehab", label: "Rehab", icon: <Activity size={13} />, feature: "rehab" },
+      { key: "rehab", label: "Balancing Chart", icon: <Activity size={13} />, feature: "rehab" },
     ],
   },
   { key: "trends", label: "Trending Progression", icon: <TrendingUp size={14} />, feature: "trends" },
@@ -1375,7 +1397,7 @@ const FEATURE_DEFS = [
   { key: "measurements", label: "Measurements", blurb: "Shoulders, arms, waist, and leg tracking" },
   { key: "train", label: "Strength Training", blurb: "Lifting splits, workout logging, progression suggestions" },
   { key: "trends", label: "Trending Progression", blurb: "Weight, body fat, calorie balance, and lift trends" },
-  { key: "rehab", label: "Rehab (left/right tracking)", blurb: "Free-form left vs. right side exercise logging, outside your split — off by default, only turn on if you're actually doing unilateral rehab work" },
+  { key: "rehab", label: "Balancing Chart", blurb: "Free-form left vs. right side exercise logging to catch and fix muscle imbalances — off by default, only turn on if you're actually tracking left/right symmetry" },
 ];
 const DEFAULT_FEATURES = { weighin: true, water: true, food: true, measurements: true, train: true, trends: true, rehab: false };
 
@@ -5000,7 +5022,7 @@ function RehabTab({ userId, rehabLogs, setRehabLogs }) {
   return (
     <div>
       <div className="ft-card" style={{ padding: 18, marginBottom: 14 }}>
-        <div className="ft-label" style={{ marginBottom: 4 }}>Log a rehab set</div>
+        <div className="ft-label" style={{ marginBottom: 4 }}>Log a balance-check set</div>
         <div style={{ fontSize: 11.5, color: COLORS.creamDim, marginBottom: 12, lineHeight: 1.4 }}>
           Free-form — any exercise, not tied to your split. Use the exact same exercise name on both sides to see a left/right comparison below.
         </div>
@@ -6115,11 +6137,17 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
               className="ft-select"
               value={profile.goalType}
               onChange={(e) => {
+                const nextGoalType = e.target.value;
+                if (nextGoalType === profile.goalType) return; // no real change — don't touch anything
                 // A goal-type change means a new goal has started — clear
                 // any start date from whatever the previous goal was, so
                 // "Day X" and the accumulated deficit/surplus can't
-                // silently carry over from an unrelated cut or bulk.
-                onChange({ goalType: e.target.value, miniCutStartedOn: null, goalStartedOn: null });
+                // silently carry over from an unrelated cut or bulk. Only
+                // fires for a genuine switch now, not on every interaction
+                // with this dropdown (was previously unconditional here,
+                // which could silently wipe a correct, already-set start
+                // date on this save-immediately field).
+                onChange({ goalType: nextGoalType, miniCutStartedOn: null, goalStartedOn: null });
               }}
             >
               <option value="lose">Lose fat</option>

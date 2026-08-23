@@ -29,12 +29,19 @@ const DIFF_COLORS = {
 
 // Bodyweight-loaded lifts — the "weight" isn't something to type in from
 // scratch, it's your actual bodyweight (minus assistance, if the variant
-// is assisted). Rather than making everyone hunt down and manually enter
-// their bodyweight every set, this pulls it from the most recent Daily
-// Log weight automatically. Covers pull-ups and dips — mechanically the
-// same situation, just different movements.
+// is assisted, or plus added load for the weighted variant). Rather than
+// making everyone hunt down and manually enter their bodyweight every
+// set, this pulls it from the most recent Daily Log weight automatically
+// as a starting point. Covers pull-ups and dips — mechanically the same
+// situation, just different movements.
+// Plain "Pull-Ups"/"Pull-Up" deliberately are NOT in this set — that's
+// the reps-only variant now (see REPS_ONLY_EXERCISES below); tracking a
+// bodyweight-derived number there was never meaningful, since nobody
+// changes bodyweight session to session in a way that reads as
+// "progression" the way it does for e.g. weighted dips.
 const BODYWEIGHT_LOADED_EXERCISES = new Set([
-  "Pull-Up", "Pull-Ups", "Chin-Ups", "Wide-Grip Pull-Ups", "Wide-Grip Pull-Up",
+  "Weighted Pull-Up", "Weighted Pull-Ups",
+  "Chin-Ups", "Wide-Grip Pull-Ups", "Wide-Grip Pull-Up",
   "Neutral-Grip Pull-Up", "Neutral-Grip Pullup", "Medium-Grip Pull-Up",
   "Commando Pull-Ups", "Archer Pull-Ups", "Australian Pull-Ups", "L-Sit Pull-Ups",
   "Assisted Pull-Up", "Wide-Grip Band-Assisted Pull-Up",
@@ -51,8 +58,12 @@ function isAssistedBodyweight(name) {
 // leverage/difficulty level the person is currently at, with reps (or
 // hold time, tracked the same way) as the only thing that actually
 // progresses. Showing an empty "lbs" field for these was always going
-// to sit blank forever — reps and sets are the whole story.
-const REPS_ONLY_EXERCISES = new Set(["Dragon Flags", "Dragon Flys"]);
+// to sit blank forever — reps and sets are the whole story. Plain
+// pull-ups moved here from BODYWEIGHT_LOADED_EXERCISES — for the vanilla
+// bodyweight version, reps are what actually progresses, same reasoning;
+// "Weighted Pull-Ups" is the separate exercise for when added load is
+// what's being tracked.
+const REPS_ONLY_EXERCISES = new Set(["Dragon Flags", "Dragon Flys", "Pull-Up", "Pull-Ups"]);
 
 // Glute-ham raises and Nordic curls anchor the lower legs and move the
 // torso against gravity — real resistance, but nowhere near full
