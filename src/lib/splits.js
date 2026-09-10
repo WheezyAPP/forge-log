@@ -23,22 +23,22 @@ export const EX = {
   "Chest": {
     primary:   ["Barbell Bench Press"],
     compound:  ["Dumbbell Bench Press","Incline Barbell Press","Incline Dumbbell Press","Floor Press","Smith Machine Bench Press","Decline Dumbbell Press","Dips","Weighted Push-Ups","Landmine Press","Guillotine Press","Close-Grip Push-Up","Decline Barbell Press","Decline Machine Chest Press","Decline Smith Machine Press","Deficit Pushup","Low Incline Barbell Press","Low Incline Chest Machine Press","Low Incline DB Press","Low Incline Machine Press","Low Incline Smith Machine Press","Machine Chest Press","Incline Machine Chest Press","Iso-Lateral Chest Press","Iso-Lateral Incline Press"],
-    isolation: ["Dumbbell Flyes","Cable Crossovers","Pec Deck Flyes","Low to High Cable Flyes","Decline Cable Flyes","Svend Press","Single-Arm Cable Chest Press","Bent-Over Cable Pec Flye","Bent-Over Cable Pec Flye (w/ Integrated Partials)","DB Flye","DB Flye (w/ Integrated Partials)","Low-Incline Dumbbell Flye","Low-To-High Cable Crossover","Pec Deck","Pec Deck (w/ Integrated Partials)"],
+    isolation: ["Dumbbell Flyes","Cable Crossovers","Pec Deck Flyes","Low to High Cable Flyes","Decline Cable Flyes","Svend Press","Single-Arm Cable Chest Press","Bent-Over Cable Pec Flye","Bent-Over Cable Pec Flye (w/ Integrated Partials)","DB Flye","DB Flye (w/ Integrated Partials)","Low-Incline Dumbbell Flye","Low-To-High Cable Crossover","Pec Deck","Pec Deck (w/ Integrated Partials)","Chest Circuit"],
   },
   "Lats": {
     primary:   ["Pull-Ups"],
     compound:  ["Lat Pulldowns","Barbell Rows","Yates Rows","Dumbbell Rows","Meadows Rows","Close-Grip Lat Pulldowns","Seated Cable Rows","Single-Arm Cable Rows","Wide-Grip Pull-Ups","Assisted Pull-Up","Weighted Pull-Ups","Half-Kneeling 1-Arm Lat Pulldown","Lean-Back Lat Pulldown","Lean-Back Machine Pulldown","Machine Pulldown","Medium-Grip Pull-Up","Neutral-Grip Lat Pulldown","Neutral-Grip Pull-Up","Overhand Lat Pulldown","Wide-Grip Band-Assisted Pull-Up","Wide-Grip Lat Pulldown","Dual-Handle Lat Pulldown (Mid-back + Lats)","Iso-Lateral High Row","Iso-Lateral Low Row"],
-    isolation: ["Straight-Arm Lat Pulldowns","1-Arm Lat Pull-In","Cross-Body Lat Pull-Around","DB Lat Pullover","Machine Lat Pullover","Straight-Bar Lat Prayer"],
+    isolation: ["Straight-Arm Lat Pulldowns","1-Arm Lat Pull-In","Cross-Body Lat Pull-Around","DB Lat Pullover","Machine Lat Pullover","Straight-Bar Lat Prayer","Back Circuit"],
   },
   "Rhomboids & Upper Back": {
     primary:   ["T-Bar Rows"],
     compound:  ["Pendlay Rows","Rack Pulls","Chest-Supported Dumbbell Rows","Chest-Supported Machine Rows","Inverted Rows","Barbell Rows","Seal Rows","Renegade Rows","Arm-Out Single-Arm DB Row","Chest-Supported T-Bar Row","Chest-Supported T-Bar Row + Kelso Shrug","Elbows-In 1-Arm DB Row","Helms Row","Incline Chest-Supported DB Row + Kelso Shrug","Lat-Focused Cable Row","Machine Chest-Supported Row + Kelso Shrug","Overhand Machine Row","Super-ROM Overhand Cable Row"],
-    isolation: ["Cable Face Pulls (Rope)","Cable Paused Shrug-In","Machine Shrug","Rope Face Pull","Lying Paused Rope Face Pull"],
+    isolation: ["Cable Face Pulls (Rope)","Cable Paused Shrug-In","Machine Shrug","Rope Face Pull","Lying Paused Rope Face Pull","Upper Back Circuit"],
   },
   "Shoulders": {
     primary:   ["Barbell Overhead Press"],
     compound:  ["Dumbbell Shoulder Press","Arnold Press","Seated Dumbbell Press","Push Press","Dumbbell Upright Rows","Cable Upright Rows","Cable Shoulder Press","Machine Shoulder Press","Seated Barbell Shoulder Press","Seated DB Shoulder Press","Standing DB Arnold Press","Upright Row","Viking Press","Smith Machine Overhead Press"],
-    isolation: ["Lateral Raises","Front Raises","Cable Lateral Raises","Face Pulls","Reverse Pec Deck","Dumbbell Rear Delt Flyes","Cable Y-Raises","Bus Drivers","Cross-Body Cable Y-Raise","Cuffed Behind-The-Back Lateral Raise","DB Lateral Raise","DB Rear Delt Swing","DB Shrug","Machine Lateral Raise","Rear Delt 45° Cable Flye","Reverse Cable Flye","Reverse Cable Flye (w/ Integrated Partials)","Reverse Pec Deck (w/ Integrated Partials)","Super-ROM DB Lateral Raise","Bent-Over Reverse DB Flye","Bent-Over Reverse DB Flye (w/ Integrated Partials)","Cable Reverse Flye (Mechanical Dropset)","Archer Pulls"],
+    isolation: ["Lateral Raises","Front Raises","Cable Lateral Raises","Face Pulls","Reverse Pec Deck","Dumbbell Rear Delt Flyes","Cable Y-Raises","Bus Drivers","Cross-Body Cable Y-Raise","Cuffed Behind-The-Back Lateral Raise","DB Lateral Raise","DB Rear Delt Swing","DB Shrug","Machine Lateral Raise","Rear Delt 45° Cable Flye","Reverse Cable Flye","Reverse Cable Flye (w/ Integrated Partials)","Reverse Pec Deck (w/ Integrated Partials)","Super-ROM DB Lateral Raise","Bent-Over Reverse DB Flye","Bent-Over Reverse DB Flye (w/ Integrated Partials)","Cable Reverse Flye (Mechanical Dropset)","Archer Pulls","Shoulder Circuit"],
   },
   "Biceps": {
     // Virtually every biceps exercise is single-joint elbow flexion — there's
@@ -46,17 +46,17 @@ export const EX = {
     // correctly excluded from this pool. Isolation variety is the point here.
     primary:   ["Barbell Bicep Curls"],
     compound:  [],
-    isolation: ["Dumbbell Hammer Curls","Incline Dumbbell Curls","Preacher Curls","Concentration Curls","Cable Bayesian Curls","EZ Bar Curls","Spider Curls","Reverse Curls","Cross Body Hammer Curls","Zottman Curls","21s Bicep Curls","Bayesian Cable Curl","Bottom-2/3 Constant Tension Preacher Curl","Bottom-2/3 EZ-Bar Curl","Concentration Cable Curl","DB Concentration Curl","DB Incline Curl","DB Preacher Curl","DB Scott Curl","Fat-Grip DB Curl","Fat-Grip Preacher Curl","Hammer Preacher Curl","Incline DB Stretch-Curl","Inverse DB Zottman Curl","Kneeling Overhead Cable Curl","N1-Style Short-Head Curl","Overhead Cable Curl","Reverse-Grip Cable Curl","Reverse-Grip DB Curl","Reverse-Grip EZ-Bar Curl","Slow-Eccentric Bayesian Curl","Slow-Eccentric DB Curl","Slow-Eccentric DB Incline Curl","Slow-Eccentric DB Scott Curl","Hammer Curl","Machine Preacher Curl"],
+    isolation: ["Dumbbell Hammer Curls","Incline Dumbbell Curls","Preacher Curls","Concentration Curls","Cable Bayesian Curls","EZ Bar Curls","Spider Curls","Reverse Curls","Cross Body Hammer Curls","Zottman Curls","21s Bicep Curls","Bayesian Cable Curl","Bottom-2/3 Constant Tension Preacher Curl","Bottom-2/3 EZ-Bar Curl","Concentration Cable Curl","DB Concentration Curl","DB Incline Curl","DB Preacher Curl","DB Scott Curl","Fat-Grip DB Curl","Fat-Grip Preacher Curl","Hammer Preacher Curl","Incline DB Stretch-Curl","Inverse DB Zottman Curl","Kneeling Overhead Cable Curl","N1-Style Short-Head Curl","Overhead Cable Curl","Reverse-Grip Cable Curl","Reverse-Grip DB Curl","Reverse-Grip EZ-Bar Curl","Slow-Eccentric Bayesian Curl","Slow-Eccentric DB Curl","Slow-Eccentric DB Incline Curl","Slow-Eccentric DB Scott Curl","Hammer Curl","Machine Preacher Curl","Bicep Circuit"],
   },
   "Triceps": {
     primary:   ["Tricep Cable Pushdowns"],
     compound:  ["Close-Grip Bench Press","Diamond Push-Ups","Bench Dips","JM Press","Barbell JM Press","Bodyweight Dip","Close-Grip Assisted Dip","Paused Assisted Dip","Smith Machine JM Press","Seated Dip Machine"],
-    isolation: ["Skull Crushers","Overhead Tricep Extensions","Single-Arm Cable Tricep Kickbacks","Rope Overhead Tricep Extensions","Tate Press","Cable Skull Crusher","Cable Triceps Kickback","DB French Press","DB Skull Crusher","DB Triceps Kickback","Dual-Cable Triceps Press","EZ-Bar Skull Crusher","Floor Skull Crusher","Katana Triceps Extension","Overhead Cable Triceps Extension (Bar)","Overhead Cable Triceps Extension (Rope)","Seated DB French Press","Single-arm Overhead Cable Triceps Extension","Slow-Eccentric DB French Press","Slow-Eccentric DB Skull Crusher","Slow-Eccentric EZ-Bar Skull Crusher","Triceps Diverging Pressdown (Long Rope or 2 Ropes)","Triceps Pressdown (Bar)","Triceps Pressdown (Rope)","Machine Overhead Tricep Extension"],
+    isolation: ["Skull Crushers","Overhead Tricep Extensions","Single-Arm Cable Tricep Kickbacks","Rope Overhead Tricep Extensions","Tate Press","Cable Skull Crusher","Cable Triceps Kickback","DB French Press","DB Skull Crusher","DB Triceps Kickback","Dual-Cable Triceps Press","EZ-Bar Skull Crusher","Floor Skull Crusher","Katana Triceps Extension","Overhead Cable Triceps Extension (Bar)","Overhead Cable Triceps Extension (Rope)","Seated DB French Press","Single-arm Overhead Cable Triceps Extension","Slow-Eccentric DB French Press","Slow-Eccentric DB Skull Crusher","Slow-Eccentric EZ-Bar Skull Crusher","Triceps Diverging Pressdown (Long Rope or 2 Ropes)","Triceps Pressdown (Bar)","Triceps Pressdown (Rope)","Machine Overhead Tricep Extension","Tricep Circuit"],
   },
   "Quads": {
     primary:   ["Barbell Back Squats"],
     compound:  ["Leg Press","Hack Squats","Bulgarian Split Squats","Goblet Squats","Walking Lunges","Smith Machine Squats","Barbell Front Squats","Box Squats","Cyclist Squats","Pause Squats","Single-Leg Press","Belt Squats","Barbell Lunge","DB Bulgarian Split Squat","DB Reverse Lunge","DB Step-Up","DB Walking Lunge","Front Squat","High-Bar Back Squat","Machine Squat","Smith Machine Lunge","Smith Machine Reverse Lunge","Pendulum Squat","Vertical Leg Press"],
-    isolation: ["Leg Extensions","Sissy Squat"],
+    isolation: ["Leg Extensions","Sissy Squat","Wall Sit","Spanish Squat","Step-Down","Terminal Knee Extension (Band)","Leg Circuit"],
   },
   "Hamstrings/Glutes": {
     // The old pool could stack Romanian + Conventional + Trap Bar deadlifts
@@ -64,7 +64,7 @@ export const EX = {
     // one hip-hinge compound leads, with isolation work covering the rest.
     primary:   ["Romanian Deadlifts"],
     compound:  ["Conventional Deadlifts","Trap Bar Deadlifts","Barbell Hip Thrusts","Barbell Glute Bridges","Jefferson Curls","DB RDL","Glute-Ham Raise","Good Morning (Light Weight)","Nordic Ham Curl","Paused Barbell RDL","Paused DB RDL","Reverse Nordic","Slow-Eccentric Barbell RDL","Slow-Eccentric DB RDL","Slow-Eccentric Glute-Ham Raise","Snatch-Grip RDL","Back Extensions","Glute Drive Machine","Smith Machine Hip Thrust"],
-    isolation: ["Lying Leg Curls","Seated Leg Curls","Cable Pull-Throughs","GHD Raises","Seated Calf Raises","Standing Calf Raises","Nordic Hamstring Curls","Arms-Extended 45° Hyperextension","Cable Hip Abduction","Cable Hip Adduction","Copenhagen Hip Adduction","DB Calf Jumps","Donkey Calf Raise","Lateral Band Walk","Leg Press Calf Jumps","Leg Press Calf Press","Machine Hip Abduction","Machine Hip Adduction","Prisoner 45° Hyperextension","Standing Single-Leg Curl","Reverse Hyperextension","Machine Glute Kickback","Cable Glute Kickback","Machine Back Extension"],
+    isolation: ["Lying Leg Curls","Seated Leg Curls","Cable Pull-Throughs","GHD Raises","Seated Calf Raises","Standing Calf Raises","Nordic Hamstring Curls","Arms-Extended 45° Hyperextension","Cable Hip Abduction","Cable Hip Adduction","Copenhagen Hip Adduction","DB Calf Jumps","Donkey Calf Raise","Lateral Band Walk","Leg Press Calf Jumps","Leg Press Calf Press","Machine Hip Abduction","Machine Hip Adduction","Prisoner 45° Hyperextension","Standing Single-Leg Curl","Reverse Hyperextension","Machine Glute Kickback","Cable Glute Kickback","Machine Back Extension","Glute/Ham Circuit"],
   },
   "Abs & Core": {
     primary:   ["Hanging Leg Raises"],
@@ -74,23 +74,23 @@ export const EX = {
   // ── Bodyweight / calisthenics groups ───────────────────────────────
   "Bodyweight Push": {
     primary:   ["Push-Ups"],
-    compound:  ["Dips","Chest Dips","Pike Push-Ups","Decline Push-Ups","Wide Push-Ups","Pseudo Planche Push-Ups","Archer Push-Ups","Ring Push-Ups","Handstand Push-Ups (wall)"],
-    isolation: ["Diamond Push-Ups","Close Push-Ups"],
+    compound:  ["Dips","Chest Dips","Pike Push-Ups","Decline Push-Ups","Wide Push-Ups","Pseudo Planche Push-Ups","Archer Push-Ups","Ring Push-Ups","Handstand Push-Ups (wall)","Hindu Push-Ups","Explosive Push-Ups","Deficit Push-Ups"],
+    isolation: ["Diamond Push-Ups","Close Push-Ups","Push Circuit"],
   },
   "Bodyweight Pull": {
     primary:   ["Pull-Ups"],
-    compound:  ["Chin-Ups","Wide-Grip Pull-Ups","Commando Pull-Ups","Archer Pull-Ups","Negative Pull-Ups","Australian Pull-Ups","Inverted Rows"],
-    isolation: ["Dead Hang","Hanging Scapular Retractions","L-Sit Pull-Ups"],
+    compound:  ["Chin-Ups","Wide-Grip Pull-Ups","Commando Pull-Ups","Archer Pull-Ups","Negative Pull-Ups","Australian Pull-Ups","Inverted Rows","Typewriter Pull-Ups"],
+    isolation: ["Dead Hang","Hanging Scapular Retractions","L-Sit Pull-Ups","Scapular Pull-Ups","Pull Circuit"],
   },
   "Bodyweight Legs": {
     primary:   ["Bulgarian Split Squats"],
-    compound:  ["Jump Squats","Walking Lunges","Step-Ups","Pistol Squat Progressions","Reverse Lunges","Lateral Lunges"],
-    isolation: ["Glute Bridges","Single-Leg Glute Bridges","Nordic Curls","Calf Raises","Squat Holds"],
+    compound:  ["Jump Squats","Walking Lunges","Step-Ups","Pistol Squat Progressions","Reverse Lunges","Lateral Lunges","Cossack Squats","Shrimp Squats"],
+    isolation: ["Glute Bridges","Single-Leg Glute Bridges","Nordic Curls","Calf Raises","Squat Holds","Bodyweight Leg Circuit"],
   },
   "Bodyweight Core": {
     primary:   ["Hollow Body Hold"],
     compound:  ["Dragon Flags","Front Lever Progressions","L-Sit Progressions","Planche Lean"],
-    isolation: ["Hanging Leg Raises","Superman Holds","V-Ups","Tuck L-Sit"],
+    isolation: ["Hanging Leg Raises","Superman Holds","V-Ups","Tuck L-Sit","Plank","Side Plank","Bodyweight Ab Circuit"],
   },
 };
 
@@ -853,14 +853,14 @@ function practicalIncrement(exerciseName, group, weight, sessionCount) {
 }
 
 // dedicatedMode (Settings → Dedicated Progressive Overload) gates the
-// RPE/RIR autoregulation layer only — the percentage-based increment
-// math above is always active for everyone, on or off. When on, this
-// also expects the last session's sets to carry an `rpe` field (only
-// present when it was logged, which only happens once the person has
-// turned this on and started seeing the RPE input) and reads it from
-// the same "first counted set" that already anchors weight and reps for
-// the rest of this function, for one consistent primary-set signal
-// rather than an average across sets of different apparent difficulty.
+// RIR (Reps In Reserve) autoregulation layer only — the percentage-based
+// increment math above is always active for everyone, on or off. When
+// on, this also expects the last session's sets to carry an `rpe` field
+// (the stored field name predates the RIR rebrand and still holds RIR
+// values — a low number means a HARD set, close to failure; a high
+// number means an easy set with reps left in the tank) — read from the
+// TOP (heaviest) set specifically, not whichever set was logged first —
+// see the topIdx note below for why that distinction matters.
 export function getProgressionSuggestion(exerciseSessions, group, exerciseName, dismissedAtCount = null, dedicatedMode = false) {
   if (!exerciseSessions?.length) return null;
   // date alone can't distinguish two sessions of the same exercise
@@ -870,12 +870,36 @@ export function getProgressionSuggestion(exerciseSessions, group, exerciseName, 
   const sorted = [...exerciseSessions].sort((a, b) =>
     a.date.localeCompare(b.date) || (a.createdAt || "").localeCompare(b.createdAt || "")
   );
+
+  function validSets(session) {
+    return (session.sets || []).filter(s => parseFloat(s.weight) > 0 && parseInt(s.reps) > 0);
+  }
+  // Index of the heaviest set in a filled-sets array — NOT assumed to be
+  // set[0]. The old version always read filled[0] as "the" weight,
+  // which is only correct for a straight-sets or descending-pyramid
+  // scheme; anyone who ramps UP (light-to-heavy, a very common way to
+  // actually run a pyramid) got their lightest warm-up set mistaken for
+  // their real working weight, with everything downstream — the
+  // suggestion, the deload streak, the RIR reading — anchored on the
+  // wrong set as a result.
+  function topSetIndex(filled) {
+    let ti = 0;
+    for (let i = 1; i < filled.length; i++) {
+      if ((parseFloat(filled[i].weight) || 0) > (parseFloat(filled[ti].weight) || 0)) ti = i;
+    }
+    return ti;
+  }
+
   const last = sorted[sorted.length - 1];
-  const filled = (last.sets || []).filter(s => parseFloat(s.weight) > 0 && parseInt(s.reps) > 0);
-  if (filled.length < 3) return null; // need at least 3 logged sets to suggest anything
+  const filled = validSets(last);
+  // Relaxed from a 3-set minimum — even a single logged set last time is
+  // real data worth building a suggestion from. The 3-set floor was
+  // making this go silent far more often than it needed to.
+  if (!filled.length) return null;
 
   const range = getRepRange(exerciseName, group);
-  const weight = parseFloat(filled[0].weight) || 0;
+  const topIdx = topSetIndex(filled);
+  const weight = parseFloat(filled[topIdx].weight) || 0;
   if (!weight) return null;
   const minReps = Math.min(...filled.map(s => parseInt(s.reps) || 0));
   const allAtTop = filled.every(s => (parseInt(s.reps) || 0) >= range[1]);
@@ -883,54 +907,66 @@ export function getProgressionSuggestion(exerciseSessions, group, exerciseName, 
   const increment = practicalIncrement(exerciseName, group, weight, sorted.length);
   const ago = relativeDay(last.date);
 
-  const rpe = dedicatedMode ? parseFloat(filled[0].rpe) : NaN;
-  const hasRpe = !Number.isNaN(rpe) && rpe > 0;
+  const rir = dedicatedMode ? parseFloat(filled[topIdx].rpe) : NaN;
+  const hasRir = !Number.isNaN(rir) && rir >= 0;
 
   // How many CONSECUTIVE trailing sessions already match the stall
-  // condition (same weight, hasn't hit the rep ceiling) — walking
-  // backward from most recent and stopping at the first session that
-  // breaks the streak. This is the same check the deload trigger below
-  // uses (streak >= 3), just exposed as a count rather than a yes/no, so
-  // the UI can show "2 of 3 sessions stalled" building up to it instead
-  // of the deload suggestion appearing with no warning on session 3.
+  // condition (top set at the same weight, hasn't hit the rep ceiling)
+  // — walking backward from most recent and stopping at the first
+  // session that breaks the streak. Same top-set-not-set[0] anchor as
+  // everywhere else in this function, applied consistently across the
+  // whole lookback so a session logged in a different set order than
+  // usual doesn't spuriously break (or fake) the streak.
   let stalledStreak = 0;
   for (let i = sorted.length - 1; i >= 0; i--) {
-    const f = (sorted[i].sets || []).filter(s => parseFloat(s.weight) > 0 && parseInt(s.reps) > 0);
-    if (f.length < 3) break;
-    const w = parseFloat(f[0].weight) || 0;
+    const f = validSets(sorted[i]);
+    if (!f.length) break;
+    const ti = topSetIndex(f);
+    const w = parseFloat(f[ti].weight) || 0;
     const hitTop = f.every(s => (parseInt(s.reps) || 0) >= range[1]);
     if (w === weight && !hitTop) stalledStreak++;
     else break;
   }
 
-  // RPE-aware early trigger: two consecutive sessions grinding at RPE 9+
-  // is a strong stall signal on its own, even while reps are still
-  // technically climbing — catching a real problem sooner than the
-  // rep-only streak above would notice on its own. Only ever consulted
-  // when Dedicated Progressive Overload is on, same as everywhere else
-  // RPE factors in.
+  // RIR-aware early trigger: two consecutive sessions grinding at 1 RIR
+  // or less (a set taken to within a rep of failure) is a strong stall
+  // signal on its own, even while reps are still technically climbing —
+  // catching a real problem sooner than the rep-only streak above would
+  // notice on its own. Only ever consulted when Dedicated Progressive
+  // Overload is on, same as everywhere else RIR factors in.
   let effortStalled = false;
   if (dedicatedMode && sorted.length >= 2) {
     effortStalled = sorted.slice(-2).every(sess => {
-      const f = (sess.sets || []).filter(s => parseFloat(s.weight) > 0 && parseInt(s.reps) > 0);
-      if (f.length < 3) return false;
-      const r = parseFloat(f[0].rpe);
-      return !Number.isNaN(r) && r >= 9;
+      const f = validSets(sess);
+      if (!f.length) return false;
+      const ti = topSetIndex(f);
+      const r = parseFloat(f[ti].rpe);
+      return !Number.isNaN(r) && r <= 1;
     });
   }
 
   const dismissActive = dismissedAtCount != null && sorted.length <= dismissedAtCount;
+
   if (!dismissActive && (stalledStreak >= 3 || effortStalled)) {
     const deloadWeight = Math.round((weight * 0.9) / increment) * increment;
+    // Every set backs off ~10% independently, rounded to THAT set's own
+    // practical increment — not the top set's increment applied
+    // uniformly, which would round a light backoff set's small drop to
+    // the same chunky increment a 225lb top set uses.
+    const setPlans = filled.map((s, i) => {
+      const w = parseFloat(s.weight) || 0;
+      const inc = practicalIncrement(exerciseName, group, w, sorted.length);
+      return { index: i, lastWeight: w, lastReps: parseInt(s.reps) || 0, suggestedWeight: Math.round((w * 0.9) / inc) * inc, targetReps: range[0] };
+    });
     return {
       type: "deload",
       suggestedWeight: deloadWeight,
       targetReps: range[0],
       ago, lastWeight: weight, lastReps: minReps,
       sessionCount: sorted.length,
-      stalledStreak,
+      stalledStreak, setPlans,
       msg: effortStalled && stalledStreak < 3
-        ? `RPE 9+ for 2 sessions straight at ${weight} lbs — deload to ${deloadWeight} lbs and build back up.`
+        ? `1 RIR or less for 2 sessions straight at ${weight} lbs — deload to ${deloadWeight} lbs and build back up.`
         : `Stalled at ${weight} lbs for 3 sessions in a row — deload to ${deloadWeight} lbs and build back up.`,
     };
   }
@@ -940,38 +976,146 @@ export function getProgressionSuggestion(exerciseSessions, group, exerciseName, 
     // add weight," but effort said otherwise, and effort wins: hold here
     // instead of loading more on top of a set that already cost nearly
     // everything.
-    if (hasRpe && rpe >= 9) {
+    if (hasRir && rir <= 1) {
+      const setPlans = filled.map((s, i) => ({ index: i, lastWeight: parseFloat(s.weight) || 0, lastReps: parseInt(s.reps) || 0, suggestedWeight: parseFloat(s.weight) || 0, targetReps: range[1] }));
       return {
         type: "hold",
         suggestedWeight: weight,
         targetReps: range[1],
         ago, lastWeight: weight, lastReps: minReps,
-        sessionCount: sorted.length, stalledStreak,
-        msg: `Hit ${range[1]} reps ${ago}, but RPE ${rpe} was near max effort — hold at ${weight} lbs until it feels easier.`,
+        sessionCount: sorted.length, stalledStreak, setPlans,
+        msg: `Hit ${range[1]} reps ${ago}, but only ${rir} RIR — near max effort. Hold at ${weight} lbs until it feels easier.`,
       };
     }
-    // Reps at ceiling AND real reserve left (low RPE) means the weight
+    // Reps at ceiling AND real reserve left (high RIR) means the weight
     // is genuinely too light for this rep range now — jump a full extra
     // step beyond the standard increment instead of the usual bump.
-    const bigJump = hasRpe && rpe <= 7 ? increment * 2 : increment;
+    // Applied per set at each set's OWN increment size, same reasoning
+    // as the deload branch above.
+    const bigJumpMultiplier = hasRir && rir >= 3 ? 2 : 1;
+    const setPlans = filled.map((s, i) => {
+      const w = parseFloat(s.weight) || 0;
+      const inc = practicalIncrement(exerciseName, group, w, sorted.length) * bigJumpMultiplier;
+      return { index: i, lastWeight: w, lastReps: parseInt(s.reps) || 0, suggestedWeight: w + inc, targetReps: range[0] };
+    });
+    const bigJump = increment * bigJumpMultiplier;
     return {
       type: "increase",
       suggestedWeight: weight + bigJump,
       targetReps: range[0],
       ago, lastWeight: weight, lastReps: minReps,
-      sessionCount: sorted.length, stalledStreak,
-      msg: hasRpe && rpe <= 7
-        ? `Hit ${range[1]} reps at only RPE ${rpe} ${ago} — plenty in reserve, add ${bigJump} lbs and back to ${range[0]} reps.`
+      sessionCount: sorted.length, stalledStreak, setPlans,
+      msg: hasRir && rir >= 3
+        ? `Hit ${range[1]} reps at ${rir} RIR ${ago} — plenty in reserve, add ${bigJump} lbs and back to ${range[0]} reps.`
         : `Hit ${range[1]} reps on all sets ${ago} — add ${increment} lbs, back to ${range[0]} reps.`,
     };
   }
+
+  // The mixed case — not every set hit the rep ceiling, so the exercise
+  // overall reads as "hold" — but that no longer means EVERY set stays
+  // flat. Each set decides independently: whichever ones individually
+  // hit the ceiling last time still get bumped, exactly as if they'd
+  // been logged as their own exercise. A pyramid where the top set
+  // finally hit its ceiling while backoff sets didn't now correctly
+  // suggests moving the top set up while holding the others, instead of
+  // freezing the whole exercise because of whichever set happened to be
+  // read as "the" set before.
   const nextReps = Math.min(range[1], minReps + 1);
+  const setPlans = filled.map((s, i) => {
+    const w = parseFloat(s.weight) || 0;
+    const r = parseInt(s.reps) || 0;
+    const hitCeiling = r >= range[1];
+    if (hitCeiling) {
+      const inc = practicalIncrement(exerciseName, group, w, sorted.length);
+      return { index: i, lastWeight: w, lastReps: r, suggestedWeight: w + inc, targetReps: range[0], hitCeiling: true };
+    }
+    return { index: i, lastWeight: w, lastReps: r, suggestedWeight: w, targetReps: Math.min(range[1], r + 1), hitCeiling: false };
+  });
   return {
     type: "hold",
     suggestedWeight: weight,
     targetReps: nextReps,
     ago, lastWeight: weight, lastReps: minReps,
-    sessionCount: sorted.length, stalledStreak,
+    sessionCount: sorted.length, stalledStreak, setPlans,
     msg: `Same weight — aim for ${nextReps} reps per set (last: ${filled.map(s => s.reps).join("/")}, ${ago}).`,
+  };
+}
+
+// getExerciseTrend — the historical/factual counterpart to
+// getProgressionSuggestion above. That function answers "what should
+// they do next" (a computed prescription, gated behind a 3-set-minimum
+// and only ever looking at the FIRST set's weight as "the" weight for
+// the whole exercise); this one answers "what actually happened,"
+// unconditionally, per set. Deliberately kept as a separate function
+// rather than folded into getProgressionSuggestion — the suggestion
+// logic's early-returns (fewer than 3 sets, no sessions at all) are
+// exactly the cases where showing real history matters MOST, so this
+// can't share those gates and still be useful.
+//
+// Per-set, not "the exercise has one weight": a session's sets are
+// compared to the PRIOR session's sets at the SAME set index (set 1
+// vs set 1, set 2 vs set 2), not by matching some single aggregate
+// weight — the old suggestion logic's "weight = filled[0].weight"
+// assumption breaks immediately on any pyramid or drop-set structure,
+// where set 1 and set 3 are never meant to be the same weight anyway.
+export function getExerciseTrend(exerciseSessions, exerciseName) {
+  if (!exerciseSessions?.length) return null;
+  const sorted = [...exerciseSessions]
+    .filter(s => s.exercise === exerciseName)
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || "").localeCompare(b.createdAt || ""));
+  if (!sorted.length) return null;
+
+  function validSets(session) {
+    return (session.sets || []).filter(s => parseFloat(s.weight) > 0 && parseInt(s.reps) > 0);
+  }
+  function volumeOf(session) {
+    return validSets(session).reduce((sum, s) => sum + (parseFloat(s.weight) || 0) * (parseInt(s.reps) || 0), 0);
+  }
+
+  const last = sorted[sorted.length - 1];
+  const lastSets = validSets(last).map(s => ({ weight: parseFloat(s.weight) || 0, reps: parseInt(s.reps) || 0 }));
+  if (!lastSets.length) return null; // nothing real logged last time — no history to show
+  const lastVolume = volumeOf(last);
+
+  const prior = sorted.length >= 2 ? sorted[sorted.length - 2] : null;
+  const priorSetsArr = prior ? validSets(prior).map(s => ({ weight: parseFloat(s.weight) || 0, reps: parseInt(s.reps) || 0 })) : null;
+  const priorVolume = prior ? volumeOf(prior) : null;
+
+  // Per-set comparison, aligned by position — set 1 vs their set 1, set
+  // 2 vs set 2. If they did fewer/more sets than last time, the extra
+  // positions just have no prior to compare against (priorWeight/
+  // priorReps/deltas stay null) rather than mismatching against the
+  // wrong set.
+  const perSet = lastSets.map((s, i) => {
+    const p = priorSetsArr?.[i] || null;
+    return {
+      index: i,
+      weight: s.weight, reps: s.reps,
+      priorWeight: p ? p.weight : null,
+      priorReps: p ? p.reps : null,
+      weightDelta: p ? s.weight - p.weight : null,
+      repsDelta: p ? s.reps - p.reps : null,
+    };
+  });
+
+  const volumeDelta = priorVolume != null ? lastVolume - priorVolume : null;
+  const volumeTrend = volumeDelta == null ? null : (volumeDelta > 0 ? "up" : volumeDelta < 0 ? "down" : "flat");
+
+  // Last up to 3 REAL sessions (oldest → newest) for a compact trend
+  // read — deliberately volume-based rather than top-weight-based as
+  // the headline trend number, since volume is the one number that
+  // still means something whether the session was a pure strength day
+  // (few reps, heavy) or a pump day (light, many reps) — a top-weight-
+  // only trend would read a rep-focused session as "no progress" even
+  // when real work capacity went up.
+  const withVolume = sorted.filter(s => validSets(s).length > 0);
+  const recentSessions = withVolume.slice(-3).map(s => ({ date: s.date, volume: volumeOf(s) }));
+
+  return {
+    ago: relativeDay(last.date),
+    lastDate: last.date,
+    lastVolume, priorVolume, volumeDelta, volumeTrend,
+    perSet,
+    recentSessions,
   };
 }

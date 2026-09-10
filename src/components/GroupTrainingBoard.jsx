@@ -28,7 +28,7 @@
 import { useState, useMemo } from "react";
 import { Repeat, Check, Plus, Users, LogOut, RefreshCw, ChevronRight, X as XIcon } from "lucide-react";
 import { EX, getProgressionSuggestion } from "../lib/splits";
-import { defaultWeightForPerson } from "../lib/groupTraining";
+import { defaultWeightForPerson, REPS_ONLY_EXERCISES } from "../lib/groupTraining";
 
 const C = {
   bg: "#1C1E26", surface: "#262933", raised: "#30343E",
@@ -103,11 +103,15 @@ export default function GroupTrainingBoard({
   function getDraft(person, index, exercise, grp) {
     const key = draftKey(person.userId, index, exercise);
     if (drafts[key]) return drafts[key];
+    const repsOnly = REPS_ONLY_EXERCISES.has(exercise);
     const pd = peopleData[person.userId] || {};
+    const setCount = Math.max(1, hostBlocks[index]?.setCount || 3);
+    if (repsOnly) {
+      return Array.from({ length: setCount }, () => ({ w: "", r: "" }));
+    }
     const history = (pd.workoutSessions || []).filter(s => s.exercise === exercise);
     const sugg = getProgressionSuggestion(history, grp, exercise, null, pd.dedicatedProgressiveOverload);
     const w = defaultWeightForPerson(exercise, sugg, pd.latestWeight);
-    const setCount = Math.max(1, hostBlocks[index]?.setCount || 3);
     return Array.from({ length: setCount }, () => ({ w, r: "" }));
   }
 
@@ -143,11 +147,15 @@ export default function GroupTrainingBoard({
   async function saveRow(person, index) {
     const ex = effectiveExerciseFor(person, index, hostBlocks);
     if (!ex) return;
+    const repsOnly = REPS_ONLY_EXERCISES.has(ex.exercise);
     const key = draftKey(person.userId, index, ex.exercise);
     const draft = drafts[key] || getDraft(person, index, ex.exercise, ex.grp);
-    const filled = draft.filter(s => s.w !== "" && s.r !== "");
+    const filled = draft.filter(s => repsOnly ? s.r !== "" : (s.w !== "" && s.r !== ""));
     if (!filled.length) return;
-    await onLogSet(person.userId, ex.exercise, ex.grp, filled.map(s => ({ weight: parseFloat(s.w) || 0, reps: parseInt(s.r) || 0 })));
+    const sets = filled.map(s => repsOnly
+      ? { weight: 0, reps: parseInt(s.r) || 0 }
+      : { weight: parseFloat(s.w) || 0, reps: parseInt(s.r) || 0 });
+    await onLogSet(person.userId, ex.exercise, ex.grp, sets);
     setDrafts(prev => {
       const next = { ...prev };
       delete next[key];
@@ -254,21 +262,26 @@ export default function GroupTrainingBoard({
 
                   {canLogFor ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                      {draft.map((s, si) => (
-                        <div key={si} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                          <input
-                            className="ft-input" placeholder="lbs" inputMode="decimal" value={s.w}
-                            onChange={e => updateDraftSet(person, index, ex.exercise, ex.grp, si, { w: e.target.value })}
-                            style={{ flex: 1, padding: "6px 8px", fontSize: 13 }}
-                          />
-                          <input
-                            className="ft-input" placeholder="reps" inputMode="numeric" value={s.r}
-                            onChange={e => updateDraftSet(person, index, ex.exercise, ex.grp, si, { r: e.target.value })}
-                            style={{ flex: 1, padding: "6px 8px", fontSize: 13 }}
-                          />
-                          <button onClick={() => removeDraftSet(person, index, ex.exercise, si)} aria-label="Remove set" style={{ background: "none", border: "none", color: C.creamDim, cursor: "pointer", padding: 2 }}><XIcon size={12} /></button>
-                        </div>
-                      ))}
+                      {draft.map((s, si) => {
+                        const repsOnly = REPS_ONLY_EXERCISES.has(ex.exercise);
+                        return (
+                          <div key={si} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            {!repsOnly && (
+                              <input
+                                className="ft-input" placeholder="lbs" inputMode="decimal" value={s.w}
+                                onChange={e => updateDraftSet(person, index, ex.exercise, ex.grp, si, { w: e.target.value })}
+                                style={{ flex: 1, padding: "6px 8px", fontSize: 13 }}
+                              />
+                            )}
+                            <input
+                              className="ft-input" placeholder="reps" inputMode="numeric" value={s.r}
+                              onChange={e => updateDraftSet(person, index, ex.exercise, ex.grp, si, { r: e.target.value })}
+                              style={{ flex: 1, padding: "6px 8px", fontSize: 13 }}
+                            />
+                            <button onClick={() => removeDraftSet(person, index, ex.exercise, si)} aria-label="Remove set" style={{ background: "none", border: "none", color: C.creamDim, cursor: "pointer", padding: 2 }}><XIcon size={12} /></button>
+                          </div>
+                        );
+                      })}
                       <div style={{ display: "flex", gap: 6, marginTop: 2 }}>
                         <button className="ft-btn ft-btn-ghost" style={{ fontSize: 10.5, padding: "4px 8px" }} onClick={() => addDraftSet(person, index, ex.exercise, ex.grp)}><Plus size={11} /> Set</button>
                         <button className="ft-btn ft-btn-primary" style={{ fontSize: 10.5, padding: "4px 10px" }} onClick={() => saveRow(person, index)}><Check size={11} /> Log</button>

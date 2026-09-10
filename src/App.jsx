@@ -6466,7 +6466,9 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
           </button>
         </div>
         <div style={{ fontSize: 12, color: COLORS.creamDim, lineHeight: 1.5 }}>
-          Adds an RPE (1-10) field to every set in Daily Log, and weighs how hard your last session actually felt — not just whether you hit the top of the rep range — when suggesting your next weight. Hit the rep ceiling at a low RPE and it'll suggest a bigger jump than usual; hit it at RPE 9+ and it'll have you hold instead of piling on more. Off by default — the suggestion math is smarter either way, this just adds effort into the equation on top of that. Nothing you've already logged is affected either way.
+          <b style={{ color: COLORS.cream }}>RIR = Reps In Reserve</b> — how many more reps you could've done before failing the set. 0 means it was an all-out max effort; a higher number means you had gas left in the tank.
+          <br /><br />
+          Adds an RIR (0-10) field to every set in Daily Log, and weighs how hard your last session actually felt — not just whether you hit the top of the rep range — when suggesting your next weight. Hit the rep ceiling with RIR to spare and it'll suggest a bigger jump than usual; hit it at 1 RIR or less and it'll have you hold instead of piling on more. Off by default — the suggestion math is smarter either way, this just adds effort into the equation on top of that. Nothing you've already logged is affected either way.
         </div>
       </div>
 

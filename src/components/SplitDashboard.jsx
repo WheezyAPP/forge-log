@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import {
   SPLITS, pickExercises, getFixedProgram, EX, WEAK_POINT_OPTIONS, WEAK_POINT_MAX_PICKS,
-  buildWeakDayGroups, calcAttendanceGrade, getProgressionSuggestion, ANATOMICAL_GROUPS as OFF_SPLIT_GROUPS,
+  buildWeakDayGroups, calcAttendanceGrade, getProgressionSuggestion, getExerciseTrend, ANATOMICAL_GROUPS as OFF_SPLIT_GROUPS,
   computeSetCoverage, sessionBest1RM,
 } from "../lib/splits";
 import {
@@ -16,6 +16,7 @@ import {
 } from "../lib/storage";
 import { EXERCISE_LINKS } from "../overload/exerciseLinks";
 import { toastError } from "../lib/toast";
+import { REPS_ONLY_EXERCISES } from "../lib/groupTraining";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -63,7 +64,7 @@ function isAssistedBodyweight(name) {
 // bodyweight version, reps are what actually progresses, same reasoning;
 // "Weighted Pull-Ups" is the separate exercise for when added load is
 // what's being tracked.
-const REPS_ONLY_EXERCISES = new Set(["Dragon Flags", "Dragon Flys", "Pull-Up", "Pull-Ups", "Ab Circuit"]);
+// (REPS_ONLY_EXERCISES now lives in ../lib/groupTraining, shared with GroupTrainingBoard — imported below)
 
 // Glute-ham raises and Nordic curls anchor the lower legs and move the
 // torso against gravity — real resistance, but nowhere near full
@@ -576,9 +577,9 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         const history = workoutSessions.filter(s => s.exercise === exercise);
         const dismissedAt = dismissed[exercise] ?? null;
         const sugg = getProgressionSuggestion(history, group, exercise, dismissedAt, dedicatedProgressiveOverload);
-        const w = defaultWeightFor(exercise, sugg);
-        const sets = [{ w, r:"", rpe:"" }, { w, r:"", rpe:"" }, { w, r:"", rpe:"" }];
-        return { exercise, grp: group, sets, sugg };
+        const trend = getExerciseTrend(history, exercise);
+        const sets = [0,1,2].map(i => ({ w: defaultWeightForSet(exercise, sugg, i), r:"", rpe:"" }));
+        return { exercise, grp: group, sets, sugg, trend };
       }));
       return;
     }
@@ -588,10 +589,10 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         const history = workoutSessions.filter(s => s.exercise === p.ex);
         const dismissedAt = dismissed[p.ex] ?? null;
         const sugg = getProgressionSuggestion(history, p.group, p.ex, dismissedAt, dedicatedProgressiveOverload);
+        const trend = getExerciseTrend(history, p.ex);
         const n = Math.max(1, p.sets || 3);
-        const w = defaultWeightFor(p.ex, sugg);
-        const sets = Array.from({ length: n }, () => ({ w, r: "", rpe: "" }));
-        return { exercise: p.ex, grp: p.group, sets, sugg, repTarget: p.reps };
+        const sets = Array.from({ length: n }, (_, i) => ({ w: defaultWeightForSet(p.ex, sugg, i), r: "", rpe: "" }));
+        return { exercise: p.ex, grp: p.group, sets, sugg, trend, repTarget: p.reps };
       }));
       return;
     }
@@ -602,9 +603,9 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         const history = workoutSessions.filter(s => s.exercise === ex);
         const dismissedAt = dismissed[ex] ?? null;
         const sugg = getProgressionSuggestion(history, g.n, ex, dismissedAt, dedicatedProgressiveOverload);
-        const w = defaultWeightFor(ex, sugg);
-        const sets = [{ w, r:"", rpe:"" }, { w, r:"", rpe:"" }, { w, r:"", rpe:"" }];
-        newBlocks.push({ exercise: ex, grp: g.n, sets, sugg });
+        const trend = getExerciseTrend(history, ex);
+        const sets = [0,1,2].map(i => ({ w: defaultWeightForSet(ex, sugg, i), r:"", rpe:"" }));
+        newBlocks.push({ exercise: ex, grp: g.n, sets, sugg, trend });
       }
     }
     setBlocks(newBlocks);
@@ -626,6 +627,16 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       return String(latestWeight);
     }
     return "";
+  }
+  // Per-set-position version — checks setPlans[setIndex] first (that
+  // exact set's own independently-computed weight, preserving pyramid/
+  // drop-set shape) before falling back to defaultWeightFor's uniform
+  // behavior for any set beyond what setPlans tracked (e.g. a 4th set
+  // added today when last session only had 3).
+  function defaultWeightForSet(exerciseName, sugg, setIndex) {
+    const plan = sugg?.setPlans?.[setIndex];
+    if (plan) return String(plan.suggestedWeight);
+    return defaultWeightFor(exerciseName, sugg);
   }
 
   function addSet(bi) {
@@ -665,8 +676,9 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     const history = workoutSessions.filter(s => s.exercise === exercise);
     const dismissedAt = dismissed[exercise] ?? null;
     const sugg = getProgressionSuggestion(history, group, exercise, dismissedAt, dedicatedProgressiveOverload);
-    const w = defaultWeightFor(exercise, sugg);
-    setBlocks(prev => [...prev, { exercise, grp: group, sets:[{w,r:"",rpe:""}], off:true, sugg, repTarget: sugg?.targetReps }]);
+    const trend = getExerciseTrend(history, exercise);
+    const w = defaultWeightForSet(exercise, sugg, 0);
+    setBlocks(prev => [...prev, { exercise, grp: group, sets:[{w,r:"",rpe:""}], off:true, sugg, trend, repTarget: sugg?.targetReps }]);
     setDirty(true);
     closeOffSplitPicker();
   }
@@ -774,14 +786,18 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         date: dateKey, exercise: b.exercise, group: b.grp,
         sets: b.sets.filter(s => isSetValid(b.exercise, s)).map(s => {
           const set = { weight: parseFloat(s.w) || 0, reps: parseInt(s.r) };
-          // Only attached when actually filled in — an absent rpe (vs. a
-          // stored null/0) is what lets getProgressionSuggestion tell
-          // "never had this feature on" apart from "logged it and RPE
+          // Only attached when actually filled in — an absent rir (vs. a
+          // stored null) is what lets getProgressionSuggestion tell
+          // "never had this feature on" apart from "logged it and RIR
           // genuinely wasn't captured," and keeps old sessions' shape
           // untouched for anyone who never turns Dedicated Progressive
-          // Overload on.
+          // Overload on. Checked with >= 0, not > 0 — RIR 0 (a genuine
+          // set taken to failure) is a real, meaningful value here,
+          // unlike under the old RPE framing where 0 was never actually
+          // enterable and ">0" was a harmless way to mean "was this
+          // filled in."
           const rpeVal = parseFloat(s.rpe);
-          if (!Number.isNaN(rpeVal) && rpeVal > 0) set.rpe = rpeVal;
+          if (!Number.isNaN(rpeVal) && rpeVal >= 0) set.rpe = rpeVal;
           return set;
         }),
         splitId: userSplitId,
@@ -1289,6 +1305,54 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                 {b.grp}
                 {b.repTarget && <span style={{ marginLeft:6, color:C.creamDim, border:`1px solid ${C.border}`, borderRadius:4, padding:"1px 5px" }}>{b.sets.length} × {b.repTarget}</span>}
               </div>
+              {b.trend && (() => {
+                const t = b.trend;
+                const volUp = t.volumeTrend === "up", volDown = t.volumeTrend === "down";
+                const volColor = volUp ? C.lime : volDown ? C.warn : C.creamDim;
+                const maxVol = Math.max(1, ...t.recentSessions.map(s => s.volume));
+                return (
+                  <div className="ft-card-raised" style={{ padding:"9px 10px", marginBottom:8 }}>
+                    <div style={{ fontSize:9.5, color:C.creamDim, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.03em", marginBottom:5 }}>
+                      Last time · {t.ago}
+                    </div>
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:"4px 10px", marginBottom:8 }}>
+                      {t.perSet.map(s => {
+                        const wUp = s.weightDelta != null && s.weightDelta > 0;
+                        const wDown = s.weightDelta != null && s.weightDelta < 0;
+                        const dColor = wUp ? C.lime : wDown ? C.warn : C.creamDim;
+                        return (
+                          <div key={s.index} style={{ fontSize:12, fontWeight:600, color:C.cream, display:"flex", alignItems:"center", gap:2 }}>
+                            {fmtN(s.weight)}×{s.reps}
+                            {s.weightDelta != null && s.weightDelta !== 0 && (
+                              <span style={{ fontSize:9.5, color:dColor, fontWeight:700 }}>{wUp ? "▲" : "▼"}{Math.abs(s.weightDelta)}</span>
+                            )}
+                            {s.weightDelta === 0 && s.repsDelta != null && s.repsDelta !== 0 && (
+                              <span style={{ fontSize:9.5, color: s.repsDelta > 0 ? C.lime : C.warn, fontWeight:700 }}>{s.repsDelta > 0 ? "▲" : "▼"}{Math.abs(s.repsDelta)}r</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10 }}>
+                      <div style={{ fontSize:11, color:C.creamDim }}>
+                        Volume: <span style={{ color:C.cream, fontWeight:700 }}>{fmtN(t.lastVolume)} lbs</span>
+                        {t.volumeDelta != null && (
+                          <span style={{ color:volColor, fontWeight:700, marginLeft:5 }}>
+                            {volUp ? "▲" : volDown ? "▼" : "—"} {fmtN(Math.abs(t.volumeDelta))} vs last
+                          </span>
+                        )}
+                      </div>
+                      {t.recentSessions.length > 1 && (
+                        <div style={{ display:"flex", alignItems:"flex-end", gap:2, height:18 }} title="Volume over the last few sessions">
+                          {t.recentSessions.map((s, i) => (
+                            <div key={i} style={{ width:5, height: Math.max(3, (s.volume / maxVol) * 18), background: i === t.recentSessions.length-1 ? C.ember : C.border, borderRadius:1 }} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
               {b.sugg && (
                 <div style={{ display:"flex", alignItems:"flex-start", gap:6, background: isDeload ? "rgba(232,112,122,.12)" : "rgba(218,147,93,.12)", border:`1px solid ${accent}`, borderRadius:6, padding:"6px 9px", marginBottom:8, fontSize:11, color:accent }}>
                   {isDeload ? <AlertTriangle size={12} style={{marginTop:1,flexShrink:0}}/> : <TrendingUp size={12} style={{marginTop:1,flexShrink:0}}/>}
@@ -1319,7 +1383,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
               )}
               {b.sets.map((s, si) => {
                 const filled = s.w && s.r;
-                const target = b.sugg?.targetReps || b.repTarget;
+                const target = b.sugg?.setPlans?.[si]?.targetReps || b.sugg?.targetReps || b.repTarget;
                 if (isAssistedBodyweight(b.exercise)) {
                   const key = `${bi}-${si}`;
                   const assistVal = assistInputs[key] ?? "";
@@ -1341,7 +1405,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                       </div>
                       <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
                       {dedicatedProgressiveOverload && (
-                        <input className="ft-input" type="number" inputMode="decimal" min="1" max="10" step="0.5" onFocus={e=>e.target.select()} title="RPE (1-10)" placeholder="RPE" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                        <input className="ft-input" type="number" inputMode="decimal" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
                       )}
                       <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
                     </div>
@@ -1369,7 +1433,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                       </div>
                       <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
                       {dedicatedProgressiveOverload && (
-                        <input className="ft-input" type="number" inputMode="decimal" min="1" max="10" step="0.5" onFocus={e=>e.target.select()} title="RPE (1-10)" placeholder="RPE" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                        <input className="ft-input" type="number" inputMode="decimal" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
                       )}
                       <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
                     </div>
@@ -1382,7 +1446,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                       <div style={{ fontSize:11, color: repsFilled ? C.lime : C.creamDim, textAlign:"center" }}>{repsFilled ? <Check size={12}/> : si+1}</div>
                       <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
                       {dedicatedProgressiveOverload && (
-                        <input className="ft-input" type="number" inputMode="decimal" min="1" max="10" step="0.5" onFocus={e=>e.target.select()} title="RPE (1-10)" placeholder="RPE" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                        <input className="ft-input" type="number" inputMode="decimal" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
                       )}
                       <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
                     </div>
@@ -1394,7 +1458,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                     <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder="lbs" value={s.w} onChange={e => setVal(bi,si,"w",e.target.value)} />
                     <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
                     {dedicatedProgressiveOverload && (
-                      <input className="ft-input" type="number" inputMode="decimal" min="1" max="10" step="0.5" onFocus={e=>e.target.select()} title="RPE (1-10)" placeholder="RPE" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                      <input className="ft-input" type="number" inputMode="decimal" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
                     )}
                     <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
                   </div>
@@ -1561,8 +1625,8 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                           const altHistory = workoutSessions.filter(s => s.exercise === alt);
                           const altDismissedAt = dismissed[alt] ?? null;
                           const altSugg = getProgressionSuggestion(altHistory, swapOpen.grp, alt, altDismissedAt, dedicatedProgressiveOverload);
-                          const swapW = defaultWeightFor(alt, altSugg);
-                          setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, exercise:alt, sugg:altSugg, repTarget: altSugg?.targetReps, sets: b.sets.map(s=>({w:swapW,r:""})) }));
+                          const altTrend = getExerciseTrend(altHistory, alt);
+                          setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, exercise:alt, sugg:altSugg, trend:altTrend, repTarget: altSugg?.targetReps, sets: b.sets.map((s,si)=>({w:defaultWeightForSet(alt, altSugg, si),r:""})) }));
                           setDirty(true);
                           setSwapOpen(null);
                         }} style={{ flex:1, textAlign:"left", background:"none", border:"none", color:C.cream, fontSize:12, fontWeight:600, cursor:"pointer" }}>{alt}</button>
@@ -1948,23 +2012,23 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     if (!h) { setView("history"); return null; }
     const chartData = h.sessions.map(s => ({ date: s.date.slice(5), e1rm: sessionBest1RM(s.sets), volume: sessionVolume(s.sets) }));
     const avgW = Math.round(h.sessions.reduce((s,x) => s + (x.sets[0]?.weight||0), 0) / h.sessions.length);
-    // Only counted across sets that actually have an RPE logged — most
+    // Only counted across sets that actually have an RIR logged — most
     // exercises won't, if Dedicated Progressive Overload has never been
     // on, and this stat just quietly doesn't appear for those rather
     // than showing a misleading 0.
-    const rpeValues = h.sessions.flatMap(s => (s.sets || []).map(set => parseFloat(set.rpe)).filter(v => !Number.isNaN(v) && v > 0));
-    const avgRpe = rpeValues.length ? Math.round((rpeValues.reduce((a,b) => a+b, 0) / rpeValues.length) * 10) / 10 : null;
+    const rirValues = h.sessions.flatMap(s => (s.sets || []).map(set => parseFloat(set.rpe)).filter(v => !Number.isNaN(v) && v >= 0));
+    const avgRir = rirValues.length ? Math.round((rirValues.reduce((a,b) => a+b, 0) / rirValues.length) * 10) / 10 : null;
     return (
       <div key="view-lift" className="ft-row-enter">
         <button className="ft-btn ft-btn-ghost" style={{ marginBottom:12 }} onClick={() => setView("history")}><ArrowLeft size={13}/> Back to lifts</button>
         <div style={{ fontSize:16, fontWeight:700 }}>{h.exercise}</div>
         <div style={{ fontSize:11, color:C.ember, marginBottom:12 }}>{h.grp}</div>
-        <div style={{ display:"grid", gridTemplateColumns: avgRpe != null ? "repeat(4,1fr)" : "repeat(3,1fr)", gap:8, marginBottom:14 }}>
+        <div style={{ display:"grid", gridTemplateColumns: avgRir != null ? "repeat(4,1fr)" : "repeat(3,1fr)", gap:8, marginBottom:14 }}>
           <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Best e1RM</div><div style={{ fontSize:16, fontWeight:800, color:C.ember }}>{fmtN(h.best)} lbs</div></div>
           <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Avg weight</div><div style={{ fontSize:16, fontWeight:800 }}>{fmtN(avgW)} lbs</div></div>
           <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Sessions</div><div style={{ fontSize:16, fontWeight:800 }}>{h.sessions.length}</div></div>
-          {avgRpe != null && (
-            <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Avg RPE</div><div style={{ fontSize:16, fontWeight:800, color: avgRpe >= 9 ? C.warn : C.cream }}>{avgRpe}</div></div>
+          {avgRir != null && (
+            <div className="ft-card-raised" style={{ padding:10, textAlign:"center" }}><div style={{ fontSize:9, color:C.creamDim }}>Avg RIR</div><div style={{ fontSize:16, fontWeight:800, color: avgRir <= 1 ? C.warn : C.cream }}>{avgRir}</div></div>
           )}
         </div>
         {chartData.length > 1 && (
@@ -2017,7 +2081,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                       className="ft-mono"
                       style={{ fontSize:11, padding:"3px 8px", borderRadius:999, background:C.raised, border:`1px solid ${C.border}`, color:C.cream }}
                     >
-                      {fmtN(parseFloat(set.weight) || 0)} lbs × {parseInt(set.reps) || 0} reps{set.rpe != null && set.rpe > 0 ? ` @ RPE ${set.rpe}` : ""}
+                      {fmtN(parseFloat(set.weight) || 0)} lbs × {parseInt(set.reps) || 0} reps{set.rpe != null && set.rpe >= 0 ? ` @ ${set.rpe} RIR` : ""}
                     </span>
                   ))}
                 </div>

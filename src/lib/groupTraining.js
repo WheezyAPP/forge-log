@@ -20,6 +20,17 @@ export function isAssistedBodyweight(name) {
   return /assisted/i.test(name || "") && (/pull-?up/i.test(name || "") || /dip/i.test(name || ""));
 }
 
+// Exercises logged as a bare rep count, no weight field — misc/circuit
+// work (Ab Circuit and its per-group siblings) plus bodyweight pull-up
+// variants. Shared between SplitDashboard's solo flow and the group
+// board so both respect the same list rather than drifting apart.
+export const REPS_ONLY_EXERCISES = new Set([
+  "Dragon Flags", "Dragon Flys", "Pull-Up", "Pull-Ups", "Ab Circuit",
+  "Chest Circuit", "Back Circuit", "Upper Back Circuit", "Shoulder Circuit",
+  "Bicep Circuit", "Tricep Circuit", "Leg Circuit", "Glute/Ham Circuit",
+  "Push Circuit", "Pull Circuit", "Bodyweight Leg Circuit", "Bodyweight Ab Circuit",
+]);
+
 // Same priority SplitDashboard's own defaultWeightFor uses: a real
 // progression suggestion always wins; otherwise bodyweight-loaded
 // lifts default to that PERSON's own latest logged weight; otherwise
