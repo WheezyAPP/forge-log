@@ -38,7 +38,7 @@ export const EX = {
   "Shoulders": {
     primary:   ["Barbell Overhead Press"],
     compound:  ["Dumbbell Shoulder Press","Arnold Press","Seated Dumbbell Press","Push Press","Dumbbell Upright Rows","Cable Upright Rows","Cable Shoulder Press","Machine Shoulder Press","Seated Barbell Shoulder Press","Seated DB Shoulder Press","Standing DB Arnold Press","Upright Row","Viking Press","Smith Machine Overhead Press"],
-    isolation: ["Lateral Raises","Front Raises","Cable Lateral Raises","Face Pulls","Reverse Pec Deck","Dumbbell Rear Delt Flyes","Cable Y-Raises","Bus Drivers","Cross-Body Cable Y-Raise","Cuffed Behind-The-Back Lateral Raise","DB Lateral Raise","DB Rear Delt Swing","DB Shrug","Machine Lateral Raise","Rear Delt 45° Cable Flye","Reverse Cable Flye","Reverse Cable Flye (w/ Integrated Partials)","Reverse Pec Deck (w/ Integrated Partials)","Super-ROM DB Lateral Raise","Bent-Over Reverse DB Flye","Bent-Over Reverse DB Flye (w/ Integrated Partials)","Cable Reverse Flye (Mechanical Dropset)"],
+    isolation: ["Lateral Raises","Front Raises","Cable Lateral Raises","Face Pulls","Reverse Pec Deck","Dumbbell Rear Delt Flyes","Cable Y-Raises","Bus Drivers","Cross-Body Cable Y-Raise","Cuffed Behind-The-Back Lateral Raise","DB Lateral Raise","DB Rear Delt Swing","DB Shrug","Machine Lateral Raise","Rear Delt 45° Cable Flye","Reverse Cable Flye","Reverse Cable Flye (w/ Integrated Partials)","Reverse Pec Deck (w/ Integrated Partials)","Super-ROM DB Lateral Raise","Bent-Over Reverse DB Flye","Bent-Over Reverse DB Flye (w/ Integrated Partials)","Cable Reverse Flye (Mechanical Dropset)","Archer Pulls"],
   },
   "Biceps": {
     // Virtually every biceps exercise is single-joint elbow flexion — there's
@@ -69,7 +69,7 @@ export const EX = {
   "Abs & Core": {
     primary:   ["Hanging Leg Raises"],
     compound:  ["Ab Wheel Rollouts","Dragon Flys","Muscle-Ups","Pallof Press","Half-Kneeling Pallof Press","Roman Chair Leg Raise","Swiss Ball Rollout"],
-    isolation: ["Weighted Ab Crunches","Cable Crunches","Russian Twists","Dead Bug","Bicycle Crunch","Cable Crunch","LLPT Plank","Machine Crunch","Medicine Ball Russian Twists","Plate-Loaded Neck Curls","Plate-Weighted Crunch","Reverse Crunch","Stomach Vacuums","Machine Torso Rotation"],
+    isolation: ["Weighted Ab Crunches","Cable Crunches","Russian Twists","Dead Bug","Bicycle Crunch","Cable Crunch","LLPT Plank","Machine Crunch","Medicine Ball Russian Twists","Plate-Loaded Neck Curls","Plate-Weighted Crunch","Reverse Crunch","Stomach Vacuums","Machine Torso Rotation","Ab Circuit"],
   },
   // ── Bodyweight / calisthenics groups ───────────────────────────────
   "Bodyweight Push": {

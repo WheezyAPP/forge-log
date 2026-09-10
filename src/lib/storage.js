@@ -1000,6 +1000,106 @@ export async function deleteCustomSplitTemplate(userId, id) {
   }
 }
 
+function splitShareFromRow(row) {
+  return { id: row.id, fromUserId: row.from_user_id, fromName: row.from_name, name: row.name, days: row.days || [], createdAt: row.created_at };
+}
+
+// Sending a saved (or just-built) split template to another user. Two
+// distinct paths, matching the two ways this was asked for:
+//   - forced=true skips the accept step entirely — it's written straight
+//     into the recipient's own saved-plan list via the same
+//     saveCustomSplitTemplate() used when someone builds one themselves,
+//     so a forced share is indistinguishable from a self-made template
+//     once it lands.
+//   - forced=false creates a pending row in split_shares instead. It
+//     doesn't touch the recipient's saved plans until they accept it —
+//     see acceptSplitShare below.
+// Deliberately NOT run through the offline queue's optimistic-cache
+// pattern the way most other writes are: there's no local "cache" of
+// someone else's pending-shares inbox to optimistically update, since
+// this writes into another user's data, not the sender's own. Still
+// queued for retry on failure so a share sent while offline isn't
+// silently dropped.
+export async function shareSplitTemplate(fromUserId, fromName, toUserId, template, forced) {
+  if (!toUserId) return null;
+  if (forced) {
+    return saveCustomSplitTemplate(toUserId, template);
+  }
+  const row = {
+    id: (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    from_user_id: fromUserId,
+    to_user_id: toUserId,
+    from_name: fromName || "",
+    name: template.name,
+    days: template.days || [],
+    status: "pending",
+  };
+  if (!isOnline()) {
+    enqueueOp("shareSplitTemplateRaw", [row]);
+    return splitShareFromRow(row);
+  }
+  try {
+    const { error } = await supabase.from("split_shares").insert(row);
+    if (error) throw error;
+    return splitShareFromRow(row);
+  } catch (e) {
+    console.error("shareSplitTemplate failed, queuing for retry:", e);
+    toastError("Couldn't send that share — we'll keep retrying in the background.");
+    enqueueOp("shareSplitTemplateRaw", [row]);
+    return splitShareFromRow(row);
+  }
+}
+
+// Pending shares waiting on the CURRENT user's decision. Not cached
+// locally the way most loaders are — this is someone else's action
+// waiting on you, not your own data, so it's always fetched fresh
+// rather than risking a stale "you have a pending share" that's
+// actually already been accepted/declined elsewhere.
+export async function loadPendingSplitShares(userId) {
+  if (!userId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("split_shares")
+      .select("*")
+      .eq("to_user_id", userId)
+      .eq("status", "pending")
+      .order("created_at");
+    if (error) throw error;
+    return (data || []).map(splitShareFromRow);
+  } catch (e) {
+    console.error("loadPendingSplitShares failed:", e);
+    return [];
+  }
+}
+
+// Accepting drops the share into the recipient's OWN saved-plan list —
+// same saveCustomSplitTemplate() call a self-built template goes
+// through, so once accepted it's a completely normal saved plan with
+// no lingering "this came from a share" distinction. The status update
+// is best-effort; even if it fails, the template's already saved, so
+// this never throws back to the caller.
+export async function acceptSplitShare(userId, share) {
+  const saved = await saveCustomSplitTemplate(userId, { name: share.name, days: share.days });
+  try {
+    const { error } = await supabase.from("split_shares").update({ status: "accepted" }).eq("id", share.id);
+    if (error) throw error;
+  } catch (e) {
+    console.error("acceptSplitShare status update failed, queuing for retry:", e);
+    enqueueOp("updateSplitShareStatus", [share.id, "accepted"]);
+  }
+  return saved;
+}
+
+export async function declineSplitShare(shareId) {
+  try {
+    const { error } = await supabase.from("split_shares").update({ status: "declined" }).eq("id", shareId);
+    if (error) throw error;
+  } catch (e) {
+    console.error("declineSplitShare failed, queuing for retry:", e);
+    enqueueOp("updateSplitShareStatus", [shareId, "declined"]);
+  }
+}
+
 // Push notification subscriptions — deliberately NOT run through the
 // offline queue like everything else in this file. Subscribing requires
 // a live connection to the browser's push service in the first place
@@ -1346,6 +1446,163 @@ export async function bumpCommunityFoodUseCount(rowId) {
 
 
 
+function trainingSessionFromRow(row) {
+  return { id: row.id, hostUserId: row.host_user_id, hostBlocks: row.host_blocks || [], status: row.status, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+function trainingMemberFromRow(row) {
+  return { id: row.id, sessionId: row.session_id, userId: row.user_id, overrides: row.overrides || {}, joinedAt: row.joined_at };
+}
+
+// Starts hosting — one open session per host at a time is the assumed
+// usage (nothing stops a second one existing, but the UI only ever
+// offers "Host a workout" from the no-active-session state, so this
+// never needs to be defensive about it).
+export async function createTrainingSession(hostUserId) {
+  if (!hostUserId) return null;
+  try {
+    const { data, error } = await supabase.from("training_sessions").insert({ host_user_id: hostUserId, host_blocks: [], status: "active" }).select().single();
+    if (error) throw error;
+    return trainingSessionFromRow(data);
+  } catch (e) {
+    console.error("createTrainingSession failed:", e);
+    toastError("Couldn't start a session — try again.");
+    return null;
+  }
+}
+
+// Pushes the host's current exercise queue to everyone synced. Called
+// on every host-side blocks change (debounced by the caller), which is
+// what makes following "automatic" rather than something a member has
+// to manually pull — Realtime picks this row change up on every
+// joined member's subscription. Not queued for offline retry: a host
+// mid-workout with no connection has bigger problems than a missed
+// broadcast, and retrying a STALE exercise queue after reconnecting
+// would be actively wrong once they're several exercises further on.
+export async function updateSessionHostBlocks(sessionId, blocks) {
+  if (!sessionId) return;
+  try {
+    const { error } = await supabase.from("training_sessions").update({ host_blocks: blocks, updated_at: new Date().toISOString() }).eq("id", sessionId);
+    if (error) throw error;
+  } catch (e) {
+    console.error("updateSessionHostBlocks failed:", e);
+  }
+}
+
+export async function endTrainingSession(sessionId) {
+  if (!sessionId) return;
+  try {
+    const { error } = await supabase.from("training_sessions").update({ status: "ended" }).eq("id", sessionId);
+    if (error) throw error;
+  } catch (e) {
+    console.error("endTrainingSession failed:", e);
+  }
+}
+
+// Sessions open to join right now — excludes the current user's own
+// (can't join your own session; you're already hosting it) and
+// anything already ended. Member count is fetched alongside so the
+// join list can grey out anything already at the 4-total cap (host +
+// 3) before someone taps in and gets rejected.
+export async function listActiveTrainingSessions(excludeUserId) {
+  try {
+    const { data, error } = await supabase
+      .from("training_sessions")
+      .select("*, users:host_user_id(name), training_session_members(user_id)")
+      .eq("status", "active")
+      .neq("host_user_id", excludeUserId || "");
+    if (error) throw error;
+    return (data || []).map(row => ({
+      ...trainingSessionFromRow(row),
+      hostName: row.users?.name || "Someone",
+      memberCount: (row.training_session_members || []).length,
+    }));
+  } catch (e) {
+    console.error("listActiveTrainingSessions failed:", e);
+    return [];
+  }
+}
+
+export async function loadSessionMembers(sessionId) {
+  if (!sessionId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("training_session_members")
+      .select("*, users:user_id(name)")
+      .eq("session_id", sessionId)
+      .order("joined_at");
+    if (error) throw error;
+    return (data || []).map(row => ({ ...trainingMemberFromRow(row), name: row.users?.name || "Someone" }));
+  } catch (e) {
+    console.error("loadSessionMembers failed:", e);
+    return [];
+  }
+}
+
+// Caller is responsible for the 4-total cap check (read current
+// members via loadSessionMembers first) — kept out of this function so
+// the UI can show a clear "session's full" message before attempting
+// the join, rather than this silently failing partway through.
+export async function joinTrainingSession(sessionId, userId) {
+  if (!sessionId || !userId) return null;
+  try {
+    const { data, error } = await supabase.from("training_session_members").insert({ session_id: sessionId, user_id: userId, overrides: {} }).select().single();
+    if (error) throw error;
+    return trainingMemberFromRow(data);
+  } catch (e) {
+    console.error("joinTrainingSession failed:", e);
+    toastError("Couldn't join that session — try again.");
+    return null;
+  }
+}
+
+export async function leaveTrainingSession(sessionId, userId) {
+  if (!sessionId || !userId) return;
+  try {
+    const { error } = await supabase.from("training_session_members").delete().eq("session_id", sessionId).eq("user_id", userId);
+    if (error) throw error;
+  } catch (e) {
+    console.error("leaveTrainingSession failed:", e);
+  }
+}
+
+// A member swapping ONE exercise slot away from the host's pick — the
+// slot's index into host_blocks is the key, so it's a positional
+// override ("exercise 3 of the 7"), not tied to the exercise NAME,
+// which is what lets it survive the host later changing what's at
+// OTHER indices without accidentally resyncing or double-desyncing
+// this one.
+export async function setMemberOverride(sessionId, userId, index, override) {
+  if (!sessionId || !userId) return;
+  try {
+    // A client-side read-then-write here would race if two swaps
+    // happen back to back (the second write's "read current overrides"
+    // could read a stale snapshot from before the first write landed,
+    // silently dropping it). The RPC does the jsonb merge/delete in one
+    // atomic UPDATE on the DB side instead — no read step to race.
+    const { error } = await supabase.rpc("set_training_member_override", {
+      p_session_id: sessionId, p_user_id: userId, p_index: String(index), p_override: override,
+    });
+    if (error) throw error;
+  } catch (e) {
+    console.error("setMemberOverride failed:", e);
+    toastError("Couldn't save that swap — try again.");
+  }
+}
+
+// The host's "force sync" button — snaps every member fully back onto
+// the host's list by wiping every member's overrides at once, rather
+// than each member having to individually undo their own desyncs.
+export async function forceResyncAllMembers(sessionId) {
+  if (!sessionId) return;
+  try {
+    const { error } = await supabase.from("training_session_members").update({ overrides: {} }).eq("session_id", sessionId);
+    if (error) throw error;
+  } catch (e) {
+    console.error("forceResyncAllMembers failed:", e);
+    toastError("Couldn't resync everyone — try again.");
+  }
+}
+
 export const offlineExecutors = {
   saveEntry: async (userId, date, entry) => {
     const { error } = await supabase.from("entries").upsert(entryToRow(userId, date, entry), { onConflict: "user_id,date" });
@@ -1447,6 +1704,14 @@ export const offlineExecutors = {
   },
   addCommunityFoodRaw: async (row) => {
     const { error } = await supabase.from("community_foods").insert(row);
+    if (error) throw error;
+  },
+  shareSplitTemplateRaw: async (row) => {
+    const { error } = await supabase.from("split_shares").insert(row);
+    if (error) throw error;
+  },
+  updateSplitShareStatus: async (shareId, status) => {
+    const { error } = await supabase.from("split_shares").update({ status }).eq("id", shareId);
     if (error) throw error;
   },
 };

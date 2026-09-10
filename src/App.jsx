@@ -88,6 +88,11 @@ import {
   loadCustomSplitTemplates,
   saveCustomSplitTemplate,
   deleteCustomSplitTemplate,
+  shareSplitTemplate,
+  loadPendingSplitShares,
+  acceptSplitShare,
+  declineSplitShare,
+  fetchUsers,
   getUserSplitId,
   getUserSplitStartedOn,
   setUserSplitId,
@@ -1505,6 +1510,20 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   // storage.js for why this is deliberately separate from workoutSessions.
   const [workoutAttendance, setWorkoutAttendance] = useState(new Set());
   const [customSplitTemplates, setCustomSplitTemplates] = useState([]);
+  // Split-sharing inbox — other users' shared plans waiting on an
+  // accept/decline from this user. Not part of the big Promise.all
+  // load below since it's someone else's action pending on you, not
+  // this user's own data — same reasoning as PartnerTraining's other-
+  // user lookups, refetched on demand rather than cached long-term.
+  const [pendingShares, setPendingShares] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
+  useEffect(() => {
+    fetchUsers().then(setAllUsers);
+  }, []);
+  useEffect(() => {
+    if (!userId) return;
+    loadPendingSplitShares(userId).then(setPendingShares);
+  }, [userId]);
   const [weighIns, setWeighIns] = useState({});  // { "2026-07-01": [{id,time,weight,tag},...] }
   const [userSplitId, setUserSplitIdState] = useState(null);
   const [partnerMode, setPartnerMode] = useState(false);
@@ -1693,6 +1712,18 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   async function handleDeleteCustomSplitTemplate(id) {
     setCustomSplitTemplates(prev => prev.filter(t => t.id !== id));
     await deleteCustomSplitTemplate(userId, id);
+  }
+  async function handleShareTemplate(toUserId, template, forced) {
+    await shareSplitTemplate(userId, userName, toUserId, template, forced);
+  }
+  async function handleAcceptShare(share) {
+    const saved = await acceptSplitShare(userId, share);
+    if (saved) setCustomSplitTemplates(prev => [...prev, saved]);
+    setPendingShares(prev => prev.filter(s => s.id !== share.id));
+  }
+  async function handleDeclineShare(shareId) {
+    setPendingShares(prev => prev.filter(s => s.id !== shareId));
+    await declineSplitShare(shareId);
   }
 
   async function handleSave() {
@@ -2274,6 +2305,11 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
             customSplitTemplates={customSplitTemplates}
             onSaveCustomSplitTemplate={handleSaveCustomSplitTemplate}
             onDeleteCustomSplitTemplate={handleDeleteCustomSplitTemplate}
+            pendingShares={pendingShares}
+            onShareTemplate={handleShareTemplate}
+            onAcceptShare={handleAcceptShare}
+            onDeclineShare={handleDeclineShare}
+            shareableUsers={allUsers.filter(u => u.id !== userId)}
             workoutAttendance={workoutAttendance}
             onToggleWorkoutAttendance={handleToggleWorkoutAttendance}
           />
@@ -5386,6 +5422,22 @@ function SetCoverageTab({ workoutSessions, profile, onProfileChange }) {
           })}
         </div>
       )}
+
+      {hasAny && !customizing && (() => {
+        // Straightforward total across every group's REAL logged sets in
+        // the same rolling 7-day window as the cards above — always
+        // direct-only, regardless of coverageMode, since "how many working
+        // sets did I actually do" shouldn't quietly include the ~half-set
+        // indirect/synergist credit Volume Sets adds on top. That credit
+        // is a coaching heuristic, not a set that was performed.
+        const totalDirect = coverage.reduce((sum, c) => sum + c.direct, 0);
+        return (
+          <div className="ft-card" style={{ padding: 14, marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: COLORS.cream }}>Total working sets — last 7 days</div>
+            <span className="ft-mono" style={{ fontSize: 17, fontWeight: 700, color: COLORS.cream }}>{fmtSets(totalDirect)}</span>
+          </div>
+        );
+      })()}
 
       {trendGroup && (
         <div className="ft-card" style={{ padding: 18, marginTop: 14 }}>

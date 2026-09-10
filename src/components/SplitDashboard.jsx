@@ -3,7 +3,7 @@ import {
   Dumbbell, ChevronDown, ChevronUp, CalendarDays, Target, Check, RotateCcw,
   Repeat, ExternalLink, X as XIcon, ChevronRight, ChevronLeft, ArrowLeft, History, Trophy,
   AlertTriangle, TrendingUp, Plus, Trash2, Moon, Zap, Lock, Users, Eye, Search, BookmarkPlus, List,
-  Copy, ClipboardPaste,
+  Copy, ClipboardPaste, Share2,
 } from "lucide-react";
 import {
   SPLITS, pickExercises, getFixedProgram, EX, WEAK_POINT_OPTIONS, WEAK_POINT_MAX_PICKS,
@@ -63,7 +63,7 @@ function isAssistedBodyweight(name) {
 // bodyweight version, reps are what actually progresses, same reasoning;
 // "Weighted Pull-Ups" is the separate exercise for when added load is
 // what's being tracked.
-const REPS_ONLY_EXERCISES = new Set(["Dragon Flags", "Dragon Flys", "Pull-Up", "Pull-Ups"]);
+const REPS_ONLY_EXERCISES = new Set(["Dragon Flags", "Dragon Flys", "Pull-Up", "Pull-Ups", "Ab Circuit"]);
 
 // Glute-ham raises and Nordic curls anchor the lower legs and move the
 // torso against gravity — real resistance, but nowhere near full
@@ -153,7 +153,7 @@ function computePRFlags(sessions) {
   return flags;
 }
 
-export default function SplitDashboard({ userId, userSplitId, splitStartedOn, onSplitChange, workoutSessions, setWorkoutSessions, latestWeight, gender, subTab, setTab, followSource, onBlocksChange, onDirtyChange, dedicatedProgressiveOverload, customDayPlans, onSaveCustomDayPlan, onDeleteCustomDayPlan, customSplitTemplates, onSaveCustomSplitTemplate, onDeleteCustomSplitTemplate, workoutAttendance, onToggleWorkoutAttendance }) {
+export default function SplitDashboard({ userId, userSplitId, splitStartedOn, onSplitChange, workoutSessions, setWorkoutSessions, latestWeight, gender, subTab, setTab, onBlocksChange, onDirtyChange, dedicatedProgressiveOverload, customDayPlans, onSaveCustomDayPlan, onDeleteCustomDayPlan, customSplitTemplates, onSaveCustomSplitTemplate, onDeleteCustomSplitTemplate, pendingShares, onShareTemplate, onAcceptShare, onDeclineShare, shareableUsers, workoutAttendance, onToggleWorkoutAttendance }) {
   const [view, setView] = useState("picker");
   const [selected, setSelected] = useState(() => SPLITS.find(s => s.id === userSplitId) || null);
   const [weekNum, setWeekNum] = useState(1);
@@ -182,7 +182,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   // True whenever `blocks` holds a typed weight/rep, an added/removed/
   // swapped exercise, etc. that hasn't been through handleSaveDay yet.
   // Reset to false at every fresh-load entry point into the day view
-  // (openDay/openAdhoc/openFollowPartner/chooseOptionalDayType) and
+  // (openDay/openAdhoc/chooseOptionalDayType) and
   // after a successful save; set true by every function below that
   // actually mutates blocks in response to something the person typed
   // or tapped. Reported up via onDirtyChange so the bottom nav (which
@@ -383,6 +383,13 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   // was originally built for.
   const [templateNameInput, setTemplateNameInput] = useState("");
   const [templatePromptOpen, setTemplatePromptOpen] = useState(false);
+  // Which saved template is currently being shared (opens the recipient
+  // picker) — null when closed. Forced vs. request is chosen per-send,
+  // not a sticky setting, since it's a real difference in what happens
+  // to the other person's saved plans and shouldn't default to
+  // whichever was picked last time without a look.
+  const [sharingTemplate, setSharingTemplate] = useState(null);
+  const [sharingForced, setSharingForced] = useState(false);
 
   function applyTemplate(template) {
     const days = template.days?.length || planLength;
@@ -524,33 +531,6 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       onSaveCustomDayPlan?.({ date: dayA.dateKey, dayType: dayB.dayType, isRest: dayB.isRest, exercises: [] }),
       onSaveCustomDayPlan?.({ date: dayB.dateKey, dayType: dayA.dayType, isRest: dayA.isRest, exercises: [] }),
     ]);
-  }
-
-  // "Follow my partner" — always today, since this only makes sense for
-  // a live joint session, not planning out someone else's future days.
-  // Mirrors which exercises the host has queued, but every weight
-  // suggestion comes from THIS user's own logged history for that
-  // exercise, same as any other day — two people doing "the same
-  // workout" should still each see their own numbers, not the host's.
-  function openFollowPartner() {
-    setDayOffset(0);
-    setBlocks(followSource.map(item => {
-      const history = workoutSessions.filter(s => s.exercise === item.exercise);
-      const dismissedAt = dismissed[item.exercise] ?? null;
-      const sugg = getProgressionSuggestion(history, item.grp, item.exercise, dismissedAt, dedicatedProgressiveOverload);
-      const w = defaultWeightFor(item.exercise, sugg);
-      const n = Math.max(1, item.setCount || 3);
-      return {
-        exercise: item.exercise, grp: item.grp,
-        sets: Array.from({ length: n }, () => ({ w, r: "", rpe: "" })),
-        sugg, repTarget: sugg?.targetReps,
-        followedFrom: true,
-      };
-    }));
-    setView("day");
-    setJustSaved(false);
-    setDirty(false);
-    setJustSavedPRs([]);
   }
 
   // The 4th schedule slot is always "Optional Day" rather than whatever
@@ -1078,6 +1058,24 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         </div>
       </div>
 
+      {pendingShares && pendingShares.length > 0 && (
+        <div className="ft-card" style={{ padding: 14, marginBottom: 14, borderColor: C.ember }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: C.ember, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.03em" }}>Shared with you</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {pendingShares.map(share => (
+              <div key={share.id} style={{ display: "flex", alignItems: "center", gap: 8, background: C.raised, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: C.cream }}>{share.name}</div>
+                  <div style={{ fontSize: 10.5, color: C.creamDim }}>from {share.fromName || "someone"} · {share.days?.length || 0}-day</div>
+                </div>
+                <button className="ft-btn ft-btn-primary" style={{ fontSize: 11, padding: "5px 10px" }} onClick={() => onAcceptShare?.(share)}>Accept</button>
+                <button onClick={() => onDeclineShare?.(share.id)} aria-label="Decline share" style={{ background: "none", border: "none", color: C.creamDim, cursor: "pointer", padding: 4 }}><XIcon size={13} /></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ fontSize:11, color:C.creamDim, marginBottom:10 }}>Next 4 days — tap one to log it, use the arrows to swap two days, or reopen a logged day to edit.</div>
       {(() => {
         const planSpan = existingPlanLength();
@@ -1167,33 +1165,6 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
           </div>
         );
       })}
-
-      {followSource && followSource.length > 0 && (
-        <div
-          className="ft-card"
-          onClick={openFollowPartner}
-          style={{
-            padding: 14, marginBottom: 10, cursor: "pointer",
-            borderColor: C.lime, background: "rgba(43,230,168,.06)",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div>
-              <div style={{ fontSize: 11, color: C.lime, fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}>
-                <Users size={12} /> FOLLOW MY PARTNER
-              </div>
-              <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2, color: C.lime }}>
-                Mirror today's exercises
-              </div>
-              <div style={{ fontSize: 11, color: C.creamDim }}>
-                {followSource.length} exercise{followSource.length !== 1 ? "s" : ""} queued · {followSource.map(f => f.exercise).slice(0, 3).join(", ")}{followSource.length > 3 ? "…" : ""}
-              </div>
-              <div style={{ fontSize: 10, color: C.creamDim, marginTop: 2 }}>Same exercises, your own weight — suggestions still come from your own history.</div>
-            </div>
-            <ChevronRight size={20} color={C.lime} style={{ flexShrink: 0 }} />
-          </div>
-        </div>
-      )}
     </div>
   );
 
@@ -1665,6 +1636,24 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         <button className="ft-btn ft-btn-ghost" style={{ marginBottom:14, fontSize:11 }} onClick={() => setView("planChoice")}>Start a different plan instead</button>
       )}
 
+      {pendingShares && pendingShares.length > 0 && (
+        <div className="ft-card" style={{ padding: 14, marginBottom: 14, borderColor: C.ember }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: C.ember, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.03em" }}>Shared with you</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {pendingShares.map(share => (
+              <div key={share.id} style={{ display: "flex", alignItems: "center", gap: 8, background: C.raised, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: C.cream }}>{share.name}</div>
+                  <div style={{ fontSize: 10.5, color: C.creamDim }}>from {share.fromName || "someone"} · {share.days?.length || 0}-day</div>
+                </div>
+                <button className="ft-btn ft-btn-primary" style={{ fontSize: 11, padding: "5px 10px" }} onClick={() => onAcceptShare?.(share)}>Accept</button>
+                <button onClick={() => onDeclineShare?.(share.id)} aria-label="Decline share" style={{ background: "none", border: "none", color: C.creamDim, cursor: "pointer", padding: 4 }}><XIcon size={13} /></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {customSplitTemplates && customSplitTemplates.length > 0 && (
         <div className="ft-card" style={{ padding:14, marginBottom:14 }}>
           <div style={{ fontSize:11.5, fontWeight:700, color:C.creamDim, marginBottom:8, textTransform:"uppercase", letterSpacing:"0.03em" }}>Load from a saved plan</div>
@@ -1674,6 +1663,9 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                 <button className="ft-btn ft-btn-ghost" style={{ flex:1, justifyContent:"flex-start" }} onClick={() => applyTemplate(t)}>
                   <BookmarkPlus size={13}/> {t.name} <span style={{ color:C.creamDim, fontWeight:400 }}>({t.days?.length || 7}-day)</span>
                 </button>
+                {shareableUsers && shareableUsers.length > 0 && (
+                  <button onClick={() => { setSharingTemplate(t); setSharingForced(false); }} title={`Share ${t.name}`} aria-label={`Share ${t.name}`} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer", padding:4 }}><Share2 size={13}/></button>
+                )}
                 <button onClick={() => onDeleteCustomSplitTemplate?.(t.id)} aria-label={`Delete ${t.name}`} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer", padding:4 }}><XIcon size={13}/></button>
               </div>
             ))}
@@ -1821,6 +1813,39 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
       </div>
 
       <button className="ft-btn ft-btn-primary" style={{ width:"100%" }} onClick={lockInWeek}><Check size={14}/> Lock in this plan</button>
+
+      {sharingTemplate && (() => {
+        const forced = sharingForced;
+        const setForced = setSharingForced;
+        return (
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }} onClick={e => { if (e.target===e.currentTarget) setSharingTemplate(null); }}>
+            <div className="ft-card" style={{ maxWidth:380, width:"100%", padding:16 }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+                <div style={{ fontWeight:700, fontSize:13, display:"flex", alignItems:"center", gap:6 }}><Share2 size={14} color={C.ember}/> Share "{sharingTemplate.name}"</div>
+                <button onClick={() => setSharingTemplate(null)} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={14}/></button>
+              </div>
+              <div style={{ display:"flex", gap:4, padding:3, background:C.raised, borderRadius:8, marginBottom:12 }}>
+                <button onClick={() => setForced(false)} style={{ flex:1, border:"none", borderRadius:6, padding:"6px 10px", fontSize:11.5, fontWeight:700, cursor:"pointer", background: !forced ? C.surface : "transparent", color: !forced ? C.cream : C.creamDim }}>Send request</button>
+                <button onClick={() => setForced(true)} style={{ flex:1, border:"none", borderRadius:6, padding:"6px 10px", fontSize:11.5, fontWeight:700, cursor:"pointer", background: forced ? C.surface : "transparent", color: forced ? C.cream : C.creamDim }}>Force load</button>
+              </div>
+              <div style={{ fontSize:10.5, color:C.creamDim, marginBottom:12, lineHeight:1.5 }}>
+                {forced ? "Drops straight into their saved plans — no accept needed." : "They'll see it under \"Shared with you\" and can accept or decline."}
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                {(shareableUsers || []).map(u => (
+                  <button
+                    key={u.id}
+                    onClick={() => { onShareTemplate?.(u.id, sharingTemplate, forced); setSharingTemplate(null); }}
+                    style={{ display:"flex", alignItems:"center", gap:8, background:C.raised, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 10px", color:C.cream, fontSize:12.5, fontWeight:600, cursor:"pointer", textAlign:"left" }}
+                  >
+                    {u.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
   }
