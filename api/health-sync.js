@@ -97,12 +97,23 @@ export default async function handler(req, res) {
     return;
   }
 
-  const body = req.body || {};
+  // If the sender didn't set Content-Type: application/json exactly
+  // right (a real possibility from iOS Shortcuts' "Get Contents of
+  // URL," which doesn't always mark it the way Vercel's automatic body
+  // parser expects), req.body can arrive as a raw string instead of an
+  // already-parsed object — parse it by hand rather than silently
+  // treating every field as missing.
+  let body = req.body || {};
+  if (typeof body === "string") {
+    try { body = JSON.parse(body); } catch { body = {}; }
+  }
+  console.log("health-sync received body:", JSON.stringify(body));
 
   // Flat format (hand-built Shortcut): has a top-level "date" string
   // and simple numeric fields — handled directly, no aggregation
   // needed since it's already one value per metric for that one day.
-  if (typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
+  if (typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date.trim())) {
+    body.date = body.date.trim();
     const row = { user_id: tokenRow.user_id, date: body.date, synced_at: new Date().toISOString() };
     const fieldMap = {
       steps: "steps",
