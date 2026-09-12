@@ -109,6 +109,17 @@ export default async function handler(req, res) {
   }
   console.log("health-sync received body:", JSON.stringify(body));
 
+  // Normalize keys — a stray leading/trailing space on a field name
+  // (a real, observed failure: Shortcuts' Key/Value body editor let a
+  // trailing space slip into "restingHeartRate ") would otherwise
+  // silently fail to match below, with no error at all — just a
+  // dropped field.
+  if (body && typeof body === "object") {
+    const normalized = {};
+    for (const [k, v] of Object.entries(body)) normalized[k.trim()] = v;
+    body = normalized;
+  }
+
   // Flat format (hand-built Shortcut): steps/restingHeartRate/etc as
   // simple fields — handled directly, no aggregation needed since it's
   // already one value per metric for that one day. "date" is optional:
