@@ -83,9 +83,9 @@ async function fetchAndStoreDataType(supabase, accessToken, healthUserId, forgeL
     if (!d) continue;
     let value = null;
     if (dataType === "steps") value = p.stepsCount ?? p.count ?? p.steps;
-    else if (dataType === "dailyRestingHeartRate") value = p.bpm ?? p.value;
-    else if (dataType === "dailyHeartRateVariability") value = p.rmssdMillis ?? p.value;
-    else if (dataType === "activeZoneMinutes") value = p.minutes ?? p.value;
+    else if (dataType === "daily-resting-heart-rate") value = p.bpm ?? p.value;
+    else if (dataType === "daily-heart-rate-variability") value = p.rmssdMillis ?? p.value;
+    else if (dataType === "active-zone-minutes") value = p.minutes ?? p.value;
     else if (dataType === "sleep") {
       const start = p.startTime, end = p.endTime;
       if (start && end) value = (new Date(end) - new Date(start)) / 60000;
@@ -97,9 +97,9 @@ async function fetchAndStoreDataType(supabase, accessToken, healthUserId, forgeL
 
   const col = {
     steps: "steps",
-    dailyRestingHeartRate: "resting_heart_rate",
-    dailyHeartRateVariability: "hrv",
-    activeZoneMinutes: "active_zone_minutes",
+    "daily-resting-heart-rate": "resting_heart_rate",
+    "daily-heart-rate-variability": "hrv",
+    "active-zone-minutes": "active_zone_minutes",
     sleep: "sleep_duration_minutes",
   }[dataType];
   if (!col) return;

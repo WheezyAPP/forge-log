@@ -34,9 +34,9 @@ const WEBHOOK_SECRET = process.env.GOOGLE_HEALTH_WEBHOOK_SECRET;
 const DATA_TYPES = [
   "steps",
   "sleep",
-  "dailyRestingHeartRate",
-  "dailyHeartRateVariability",
-  "activeZoneMinutes",
+  "daily-resting-heart-rate",
+  "daily-heart-rate-variability",
+  "active-zone-minutes",
 ];
 
 export default async function handler(req, res) {
@@ -56,10 +56,9 @@ export default async function handler(req, res) {
   const body = {
     endpointUri,
     endpointAuthorization: { secret: WEBHOOK_SECRET },
-    subscriberConfigs: DATA_TYPES.map(dataType => ({
-      dataType,
-      subscriptionCreatePolicy: "AUTOMATIC",
-    })),
+    subscriberConfigs: [
+      { dataTypes: DATA_TYPES, subscriptionCreatePolicy: "AUTOMATIC" },
+    ],
   };
 
   try {
