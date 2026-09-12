@@ -25,7 +25,7 @@
 // member's numbers, same principle the old "Follow my partner" card
 // already used.
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Repeat, Check, Plus, Users, LogOut, RefreshCw, ChevronRight, X as XIcon } from "lucide-react";
 import { EX, getProgressionSuggestion } from "../lib/splits";
 import { defaultWeightForPerson, REPS_ONLY_EXERCISES } from "../lib/groupTraining";
@@ -39,6 +39,32 @@ const C = {
 function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// In-progress drafts (typed weight/reps not yet tapped "Log") only ever
+// lived in this component's React state before — meaning switching to
+// any other tab unmounted the whole board and silently wiped everything
+// typed so far, forcing a full relog. Persisting to localStorage here
+// means the exact same drafts come back when the person returns to the
+// session, whether that's a tab switch, an accidental navigation, or
+// even closing and reopening the app entirely — the actual fix, not
+// just a warning that data is about to be lost (that's handled
+// separately, in PartnerTraining, via onDirtyChange).
+export function draftStorageKey(sessionId, userId) {
+  return `forge_group_drafts_${sessionId}_${userId}`;
+}
+function loadStoredDrafts(sessionId, userId) {
+  try {
+    const raw = localStorage.getItem(draftStorageKey(sessionId, userId));
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+function saveStoredDrafts(sessionId, userId, drafts) {
+  try {
+    localStorage.setItem(draftStorageKey(sessionId, userId), JSON.stringify(drafts));
+  } catch {}
 }
 
 // One person's effective exercise at a given slot index — the host's
@@ -74,14 +100,27 @@ export default function GroupTrainingBoard({
   onLogSet, // (personId, exercise, grp, sets) => Promise
   onForceResync, // () => void — host only
   onEndOrLeave,
+  onDirtyChange, // (boolean) => void — true whenever there's an unsaved draft for THIS device's own person
   hideOwnRow, // true when the host already has their own full dashboard rendered elsewhere and this board should only show members
 }) {
   const [swapOpen, setSwapOpen] = useState(null); // { index } | null
-  // Per-person, per-slot draft sets — not persisted until that row's
-  // save is tapped. Seeded lazily the first time a slot/person combo
-  // is touched so switching between slots doesn't require pre-building
-  // every possible draft up front.
-  const [drafts, setDrafts] = useState({}); // `${userId}:${index}` -> [{w,r}]
+  // Per-person, per-slot draft sets — not persisted to the SERVER until
+  // that row's save is tapped, but persisted to localStorage immediately
+  // (see saveStoredDrafts below) so an accidental tab switch or app
+  // close doesn't lose what's been typed. Lazy-initialized from
+  // whatever was already stored for this exact session+person, so
+  // returning to the session picks up right where it left off.
+  const [drafts, setDrafts] = useState(() => loadStoredDrafts(sessionId, currentUserId));
+
+  useEffect(() => {
+    saveStoredDrafts(sessionId, currentUserId, drafts);
+    const hasAny = Object.values(drafts).some(setArr => setArr.some(s => s.w !== "" || s.r !== ""));
+    onDirtyChange?.(hasAny);
+  }, [drafts, sessionId, currentUserId, onDirtyChange]);
+  // Clears the dirty flag on unmount so switching away from an EMPTY
+  // board (or after everything's already been logged) doesn't leave a
+  // stale "unsaved changes" warning armed for something else entirely.
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   const people = useMemo(() => {
     const list = [{ userId: hostUserId, name: hostName, isHost: true, overrides: {} }];

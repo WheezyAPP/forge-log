@@ -57,6 +57,86 @@ function newId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function healthMetricFromRow(row) {
+  return {
+    date: row.date,
+    restingHeartRate: row.resting_heart_rate != null ? parseFloat(row.resting_heart_rate) : null,
+    sleepScore: row.sleep_score != null ? parseFloat(row.sleep_score) : null,
+    sleepDurationMinutes: row.sleep_duration_minutes != null ? parseFloat(row.sleep_duration_minutes) : null,
+    steps: row.steps != null ? parseFloat(row.steps) : null,
+    activeZoneMinutes: row.active_zone_minutes != null ? parseFloat(row.active_zone_minutes) : null,
+    hrv: row.hrv != null ? parseFloat(row.hrv) : null,
+    syncedAt: row.synced_at,
+  };
+}
+
+// Synced wearable data (Google Health / Fitbit Air, via api/health-sync.js)
+// — date-keyed map, most recent N days. Not part of the big initial
+// Promise.all load, same reasoning as pendingShares: this is externally-
+// arriving data on its own schedule, not something that needs to block
+// the rest of the app loading.
+export async function loadHealthMetrics(userId, days = 30) {
+  if (!userId) return {};
+  try {
+    const { data, error } = await supabase
+      .from("health_metrics")
+      .select("*")
+      .eq("user_id", userId)
+      .order("date", { ascending: false })
+      .limit(days);
+    if (error) throw error;
+    const map = {};
+    for (const row of data || []) map[row.date] = healthMetricFromRow(row);
+    return map;
+  } catch (e) {
+    console.error("loadHealthMetrics failed:", e);
+    return {};
+  }
+}
+
+// One token per user, created lazily on first request rather than at
+// signup — most users will never turn this on, so there's no reason
+// every profile carries one from day one.
+export async function getOrCreateSyncToken(userId) {
+  if (!userId) return null;
+  try {
+    const { data: existing, error: readErr } = await supabase
+      .from("health_sync_tokens")
+      .select("token")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (readErr) throw readErr;
+    if (existing) return existing.token;
+
+    const token = newId();
+    const { error: insertErr } = await supabase
+      .from("health_sync_tokens")
+      .insert({ user_id: userId, token });
+    if (insertErr) throw insertErr;
+    return token;
+  } catch (e) {
+    console.error("getOrCreateSyncToken failed:", e);
+    toastError("Couldn't set up sync — try again.");
+    return null;
+  }
+}
+
+// Invalidates the old URL entirely (e.g. if it was shared/leaked) —
+// whoever's still pointed at the old token starts failing immediately,
+// and a fresh getOrCreateSyncToken call mints a new one.
+export async function regenerateSyncToken(userId) {
+  if (!userId) return null;
+  try {
+    const { error: delErr } = await supabase.from("health_sync_tokens").delete().eq("user_id", userId);
+    if (delErr) throw delErr;
+    return await getOrCreateSyncToken(userId);
+  } catch (e) {
+    console.error("regenerateSyncToken failed:", e);
+    toastError("Couldn't reset the sync link — try again.");
+    return null;
+  }
+}
+
 function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -821,9 +901,53 @@ export async function loadCalorieOverrides(userId) {
   }
 }
 
-export async function saveCalorieOverride(userId, date, calories) {
+// Fully separate from loadCalorieOverrides above rather than changing
+// that function's return shape — calorieOverrides is read as a bare
+// number-per-date in a lot of places already (Dashboard, computeStats,
+// the trend chart), and changing it to an object would mean touching
+// every one of those call sites. This reads the SAME table's protein/
+// fat/carbs columns into their own date-keyed map instead, only
+// including a date if at least one macro was actually set on it (a
+// calories-only override row, the far more common case, correctly
+// produces no entry here).
+export async function loadMacroOverrides(userId) {
+  if (!userId) return {};
+  try {
+    const { data, error } = await supabase
+      .from("calorie_overrides")
+      .select("date, protein, fat, carbs")
+      .eq("user_id", userId)
+      .order("date");
+    if (error) throw error;
+    const map = {};
+    for (const row of data || []) {
+      if (row.protein == null && row.fat == null && row.carbs == null) continue;
+      map[row.date] = {
+        protein: row.protein != null ? parseFloat(row.protein) : null,
+        fat: row.fat != null ? parseFloat(row.fat) : null,
+        carbs: row.carbs != null ? parseFloat(row.carbs) : null,
+      };
+    }
+    return map;
+  } catch (e) {
+    console.error("loadMacroOverrides failed:", e);
+    return {};
+  }
+}
+
+// macros ({protein,fat,carbs}) is optional and additive — omitted keys
+// are simply absent from the upsert payload, so PostgREST leaves
+// whatever's already stored in those columns untouched rather than
+// nulling them out. Every existing 3-argument call site (calories
+// only) keeps working exactly as before.
+export async function saveCalorieOverride(userId, date, calories, macros = null) {
   if (!userId) return null;
   const row = { user_id: userId, date, calories };
+  if (macros) {
+    if (macros.protein != null) row.protein = macros.protein;
+    if (macros.fat != null) row.fat = macros.fat;
+    if (macros.carbs != null) row.carbs = macros.carbs;
+  }
   const cached = readCache("calorieOverrides", userId, {});
   writeCache("calorieOverrides", userId, { ...cached, [date]: calories });
 

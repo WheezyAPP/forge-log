@@ -36,7 +36,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Users, X, RefreshCw, Wifi, WifiOff, LogOut } from "lucide-react";
 import SplitDashboard from "./SplitDashboard";
-import GroupTrainingBoard from "./GroupTrainingBoard";
+import GroupTrainingBoard, { draftStorageKey } from "./GroupTrainingBoard";
 import {
   loadProfile, loadEntries, loadWorkoutSessions,
   createTrainingSession, updateSessionHostBlocks, endTrainingSession, listActiveTrainingSessions,
@@ -83,7 +83,8 @@ export default function PartnerTraining({
   const [peopleData, setPeopleData] = useState({});
 
   const [hostDirty, setHostDirty] = useState(false);
-  useEffect(() => { onDirtyChange?.(hostDirty); }, [hostDirty, onDirtyChange]);
+  const [boardDirty, setBoardDirty] = useState(false);
+  useEffect(() => { onDirtyChange?.(hostDirty || boardDirty); }, [hostDirty, boardDirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   // Realtime's workout_sessions handler needs to check "is this user
@@ -211,6 +212,7 @@ export default function PartnerTraining({
     if (!session) return;
     if (isHost) await endTrainingSession(session.id);
     else await leaveTrainingSession(session.id, userId);
+    try { localStorage.removeItem(draftStorageKey(session.id, userId)); } catch {}
     setSession(null);
     setMembers([]);
     setPeopleData({});
@@ -426,6 +428,7 @@ export default function PartnerTraining({
           onLogSet={handleLogSet}
           onForceResync={handleForceResync}
           onEndOrLeave={endOrLeave}
+          onDirtyChange={setBoardDirty}
           hideOwnRow={true}
         />
       </div>
@@ -460,6 +463,7 @@ export default function PartnerTraining({
         onLogSet={handleLogSet}
         onForceResync={() => {}}
         onEndOrLeave={endOrLeave}
+        onDirtyChange={setBoardDirty}
         hideOwnRow={false}
       />
     </div>

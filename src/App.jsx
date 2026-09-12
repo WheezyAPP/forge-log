@@ -52,6 +52,12 @@ import {
   AlertCircle,
   Maximize2,
   Activity,
+  Beef,
+  Wheat,
+  HeartPulse,
+  Moon,
+  Footprints,
+  Zap,
 } from "lucide-react";
 import UserSelect from "./components/UserSelect";
 import SplitDashboard from "./components/SplitDashboard";
@@ -80,6 +86,7 @@ import {
   saveCustomDayPlan,
   deleteCustomDayPlan,
   loadCalorieOverrides,
+  loadMacroOverrides,
   saveCalorieOverride,
   deleteCalorieOverride,
   loadWorkoutAttendance,
@@ -93,6 +100,9 @@ import {
   acceptSplitShare,
   declineSplitShare,
   fetchUsers,
+  loadHealthMetrics,
+  getOrCreateSyncToken,
+  regenerateSyncToken,
   getUserSplitId,
   getUserSplitStartedOn,
   setUserSplitId,
@@ -859,9 +869,16 @@ function computeStats(profile, weightLbs, measurements = {}) {
   // the top of it costs nothing and helps satiety on a cut). Fat at 25% of
   // intake — the middle of the 20-30% band below which hormonal and
   // performance issues become more likely. Carbs fill whatever's left.
-  const proteinG = weightLbs * 1.0;
-  const fatG = (suggestedCalories * 0.25) / 9;
-  const carbG = Math.max(0, (suggestedCalories - (proteinG * 4 + fatG * 9)) / 4);
+  //
+  // A macroOverride (protein/fat/carbs set directly for this date, e.g. a
+  // hand-planned fueling protocol for a max-out day) skips this
+  // percentage derivation entirely for whichever of the three it
+  // specifies — those are exact numbers someone chose on purpose, not
+  // something that should get recalculated out from under them the
+  // moment bodyweight or suggestedCalories shifts.
+  const proteinG = measurements.macroOverride?.protein ?? weightLbs * 1.0;
+  const fatG = measurements.macroOverride?.fat ?? (suggestedCalories * 0.25) / 9;
+  const carbG = measurements.macroOverride?.carbs ?? Math.max(0, (suggestedCalories - (proteinG * 4 + fatG * 9)) / 4);
 
   return {
     bmr: base,
@@ -1506,6 +1523,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   const [rehabLogs, setRehabLogs] = useState([]);
   const [customDayPlans, setCustomDayPlans] = useState({});
   const [calorieOverrides, setCalorieOverrides] = useState({});
+  const [macroOverrides, setMacroOverrides] = useState({});
   // Set of date strings marked "worked out" with no exercise data — see
   // storage.js for why this is deliberately separate from workoutSessions.
   const [workoutAttendance, setWorkoutAttendance] = useState(new Set());
@@ -1524,6 +1542,11 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
     if (!userId) return;
     loadPendingSplitShares(userId).then(setPendingShares);
   }, [userId]);
+  const [healthMetrics, setHealthMetrics] = useState({});
+  useEffect(() => {
+    if (!userId) return;
+    loadHealthMetrics(userId).then(setHealthMetrics);
+  }, [userId]);
   const [weighIns, setWeighIns] = useState({});  // { "2026-07-01": [{id,time,weight,tag},...] }
   const [userSplitId, setUserSplitIdState] = useState(null);
   const [partnerMode, setPartnerMode] = useState(false);
@@ -1539,11 +1562,11 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
   useEffect(() => {
     (async () => {
-      const [p, e, ws, splitId, splitStart, ma, cdp, cst, wa, rl, co] = await Promise.all([
+      const [p, e, ws, splitId, splitStart, ma, cdp, cst, wa, rl, co, mo] = await Promise.all([
         loadProfile(userId), loadEntries(userId),
         loadWorkoutSessions(userId), getUserSplitId(userId), getUserSplitStartedOn(userId),
         loadMaxAttempts(userId), loadCustomDayPlans(userId), loadCustomSplitTemplates(userId),
-        loadWorkoutAttendance(userId), loadRehabLogs(userId), loadCalorieOverrides(userId),
+        loadWorkoutAttendance(userId), loadRehabLogs(userId), loadCalorieOverrides(userId), loadMacroOverrides(userId),
       ]);
       setProfile(p);
       setEntries(e);
@@ -1556,6 +1579,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       setWorkoutAttendance(wa);
       setRehabLogs(rl);
       setCalorieOverrides(co);
+      setMacroOverrides(mo);
       setLoaded(true);
     })();
   }, [userId]);
@@ -1612,8 +1636,8 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
   const liveWeight = parseFloat(weightInput) || latestEntry?.weight || FALLBACK_WEIGHT_ESTIMATE_LBS;
   const liveStats = useMemo(
-    () => computeStats(profile, liveWeight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist"), calorieOverride: calorieOverrides[selectedDate] }),
-    [profile, liveWeight, entries, calorieOverrides, selectedDate]
+    () => computeStats(profile, liveWeight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist"), calorieOverride: calorieOverrides[selectedDate], macroOverride: macroOverrides[selectedDate] }),
+    [profile, liveWeight, entries, calorieOverrides, macroOverrides, selectedDate]
   );
   const liveConsumed = parseFloat(caloriesInput) || 0;
   const liveBalance = liveConsumed - liveStats.tdee;
@@ -1732,7 +1756,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
       return;
     }
     const weight = clampPositive(weightInput);
-    const stats = computeStats(profile, weight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist"), calorieOverride: calorieOverrides[selectedDate] });
+    const stats = computeStats(profile, weight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist"), calorieOverride: calorieOverrides[selectedDate], macroOverride: macroOverrides[selectedDate] });
     const merged = await mergeAndSaveEntry(selectedDate, {
       weight,
       caloriesConsumed: clampPositive(caloriesInput),
@@ -1976,7 +2000,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
   const chartData = useMemo(() => {
     return sortedDates.map((d) => {
       const e = entries[d];
-      const stats = computeStats(profile, e.weight, { calorieOverride: calorieOverrides[d] });
+      const stats = computeStats(profile, e.weight, { calorieOverride: calorieOverrides[d], macroOverride: macroOverrides[d] });
       return {
         date: d,
         label: prettyDate(d).split(",")[0] + " " + d.slice(8),
@@ -1991,7 +2015,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
         waterGoalOz: Math.round(computeWaterGoalOz(profile, e.weight, (e.creatine || 0) > 0, computeCreatineSaturation(entries, 28, profile.creatineAlreadySaturated, d).pct)),
       };
     });
-  }, [entries, profile, sortedDates, calorieOverrides]);
+  }, [entries, profile, sortedDates, calorieOverrides, macroOverrides]);
 
   // Which top-level nav group the current tab belongs to (drives both the
   // primary row's highlight and whether a secondary sub-tab row shows).
@@ -2194,6 +2218,8 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
           setTab={setTab}
           userId={userId}
           calorieOverrides={calorieOverrides}
+          macroOverrides={macroOverrides}
+          healthMetrics={healthMetrics}
         />
       )}
 
@@ -2343,7 +2369,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
 
       {tab === "setCoverage" && <SetCoverageTab workoutSessions={workoutSessions} profile={profile} onProfileChange={handleProfileChange} />}
 
-      {tab === "maxTracker" && <MaxTrackerTab userId={userId} maxAttempts={maxAttempts} setMaxAttempts={setMaxAttempts} latestWeight={latestEntry?.weight ?? null} gender={profile.gender} profile={profile} onProfileChange={handleProfileChange} />}
+      {tab === "maxTracker" && <MaxTrackerTab userId={userId} maxAttempts={maxAttempts} setMaxAttempts={setMaxAttempts} latestWeight={latestEntry?.weight ?? null} gender={profile.gender} profile={profile} onProfileChange={handleProfileChange} calorieOverrides={calorieOverrides} setCalorieOverrides={setCalorieOverrides} macroOverrides={macroOverrides} setMacroOverrides={setMacroOverrides} />}
 
       {tab === "rehab" && <RehabTab userId={userId} rehabLogs={rehabLogs} setRehabLogs={setRehabLogs} />}
 
@@ -2784,7 +2810,7 @@ function OnboardingBanner({ userId, setTab }) {
   );
 }
 
-function Dashboard({ entries, sortedDates, latestDate, profile, chartData, workoutSessions, userSplitId, splitStartedOn, features, setTab, userId, calorieOverrides }) {
+function Dashboard({ entries, sortedDates, latestDate, profile, chartData, workoutSessions, userSplitId, splitStartedOn, features, setTab, userId, calorieOverrides, macroOverrides, healthMetrics }) {
   if (!latestDate) {
     return (
       <div>
@@ -2798,7 +2824,7 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
     );
   }
   const e = entries[latestDate];
-  const stats = computeStats(profile, e.weight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist"), calorieOverride: calorieOverrides?.[latestDate] });
+  const stats = computeStats(profile, e.weight, { neckIn: latestMeasurement(entries, "neck"), waistIn: latestMeasurement(entries, "waist"), calorieOverride: calorieOverrides?.[latestDate], macroOverride: macroOverrides?.[latestDate] });
   const balance = e.caloriesConsumed - stats.tdee;
   const proteinPct = Math.min(100, (e.protein / stats.proteinG) * 100 || 0);
   const loggingStreak = computeLoggingStreak(entries);
@@ -2808,6 +2834,13 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
   const weightDelta = last7.length > 1 ? last7[last7.length - 1].weight - last7[0].weight : 0;
 
   const coachNotes = buildCoachNotes({ e, stats, balance, avgBalance, weightDelta, proteinPct, workoutSessions, userSplitId, splitStartedOn, entries, profile, features, latestWeight: e.weight });
+
+  // Most recent synced wearable data — not required to match latestDate
+  // exactly, since a Health Connect sync runs on its own schedule and
+  // can lag a day behind (or land before) today's food/weight log.
+  const healthDates = Object.keys(healthMetrics || {}).sort();
+  const latestHealthDate = healthDates[healthDates.length - 1];
+  const latestHealth = latestHealthDate ? healthMetrics[latestHealthDate] : null;
 
   const goal = stats.suggestedCalories || 0;
   const consumed = e.caloriesConsumed || 0;
@@ -2877,6 +2910,9 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
           sub={stats.dailyCalorieAdjustment !== 0 ? `${stats.dailyCalorieAdjustment > 0 ? "+" : ""}${fmt(stats.dailyCalorieAdjustment)} cal/day goal` : "goal: maintain"}
           emphasized
         />
+        <Stat icon={<Beef size={16} color={COLORS.mint} />} label="Suggested protein" value={`${fmt(stats.proteinG)} g`} swayDelay={-0.3} />
+        <Stat icon={<Wheat size={16} color={COLORS.amber} />} label="Suggested carbs" value={`${fmt(stats.carbG)} g`} swayDelay={-0.9} />
+        <Stat icon={<Droplet size={16} color={COLORS.ember} />} label="Suggested fat" value={`${fmt(stats.fatG)} g`} swayDelay={-1.2} />
         <Stat
           icon={<Gauge size={16} color={COLORS.mint} />}
           label={avgBalance < 0 ? "Avg deficit / 7d" : avgBalance > 0 ? "Avg surplus / 7d" : "Avg balance / 7d"}
@@ -2962,6 +2998,34 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
             {e.creatine ? <MacroChip label="Creatine" value={`${fmt(e.creatine)}g`} color={COLORS.creamDim} /> : null}
           </div>
         </div>
+
+        {latestHealth && (
+          <div className="ft-card" style={{ padding: 16, gridColumn: "1 / -1" }}>
+            <div className="ft-label" style={{ marginBottom: 10 }}>
+              Synced from Google Health / Fitbit — {latestHealthDate === latestDate ? "today" : prettyDate(latestHealthDate)}
+            </div>
+            <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+              {latestHealth.restingHeartRate != null && (
+                <MacroChip label="Resting HR" value={`${fmt(latestHealth.restingHeartRate)} bpm`} color={COLORS.warn} icon={<HeartPulse size={13} />} />
+              )}
+              {latestHealth.sleepScore != null && (
+                <MacroChip label="Sleep score" value={fmt(latestHealth.sleepScore)} color={COLORS.mint} icon={<Moon size={13} />} />
+              )}
+              {latestHealth.sleepDurationMinutes != null && (
+                <MacroChip label="Sleep" value={`${Math.floor(latestHealth.sleepDurationMinutes / 60)}h ${Math.round(latestHealth.sleepDurationMinutes % 60)}m`} color={COLORS.mint} icon={<Moon size={13} />} />
+              )}
+              {latestHealth.steps != null && (
+                <MacroChip label="Steps" value={fmt(latestHealth.steps)} color={COLORS.amber} icon={<Footprints size={13} />} />
+              )}
+              {latestHealth.activeZoneMinutes != null && (
+                <MacroChip label="Active zone min" value={fmt(latestHealth.activeZoneMinutes)} color={COLORS.ember} icon={<Zap size={13} />} />
+              )}
+              {latestHealth.hrv != null && (
+                <MacroChip label="HRV" value={`${fmt(latestHealth.hrv)} ms`} color={COLORS.creamDim} icon={<Activity size={13} />} />
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3079,10 +3143,10 @@ function WaterRing({ size = 96, strokeWidth = 10, consumed, goal, gradId, celebr
   );
 }
 
-function MacroChip({ label, value, target, color }) {
+function MacroChip({ label, value, target, color, icon }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <div style={{ width: 8, height: 8, borderRadius: 4, background: color }} />
+      {icon ? <span style={{ color, display: "flex" }}>{icon}</span> : <div style={{ width: 8, height: 8, borderRadius: 4, background: color }} />}
       <div>
         <div style={{ fontSize: 11, color: COLORS.creamDim }}>{label}</div>
         <div className="ft-mono" style={{ fontSize: 14 }}>{value}{target ? <span style={{ color: COLORS.creamDim }}> / {target}</span> : null}</div>
@@ -4670,7 +4734,7 @@ function buildMaxDayPlan(goalWeight) {
   return steps;
 }
 
-function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gender, profile, onProfileChange }) {
+function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gender, profile, onProfileChange, calorieOverrides, setCalorieOverrides, macroOverrides, setMacroOverrides }) {
   const [openForm, setOpenForm] = useState(null); // lift key with its log-attempt form open
   const [weightInput, setWeightInput] = useState("");
   const [dateInput, setDateInput] = useState(todayStr());
@@ -4682,7 +4746,42 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gend
   const [plannerLift, setPlannerLift] = useState(BIG_THREE_LIFTS[0].key);
   const [plannerGoalInput, setPlannerGoalInput] = useState("");
   const [plannerPlanOpen, setPlannerPlanOpen] = useState(true);
+  const [maxProtocolOpen, setMaxProtocolOpen] = useState(false);
+  const [maxProtocolDate, setMaxProtocolDate] = useState(todayStr());
+  const [maxProtocolSaving, setMaxProtocolSaving] = useState(false);
   const goals = profile?.maxDayGoals || {};
+
+  // Locked, fixed fueling target for a max-attempt day — protein high
+  // enough to protect muscle and keep the CNS firing, fat trimmed to the
+  // lowest safe baseline specifically to leave room for carbs, carbs
+  // maximized to fill glycogen for the attempt itself. Deliberately a
+  // hardcoded constant, not read from a deletable/editable preset list —
+  // this is meant to be a permanent, always-available reference for every
+  // future max day, not something that can drift or disappear.
+  const MAX_PROTOCOL = { protein: 180, fat: 50, carbs: 305, calories: 180*4 + 50*9 + 305*4 };
+
+  // Applies the fixed protocol to the chosen max-attempt date AND the day
+  // before it — a single max day's carb/protein target doesn't do much
+  // for glycogen fully topping off by attempt time; the day-before is
+  // when that loading actually needs to start.
+  async function applyMaxProtocol() {
+    if (!maxProtocolDate) return;
+    setMaxProtocolSaving(true);
+    try {
+      const d = new Date(maxProtocolDate + "T00:00:00");
+      const dayBefore = new Date(d);
+      dayBefore.setDate(dayBefore.getDate() - 1);
+      const dayBeforeStr = localDateStr(dayBefore);
+      for (const dateStr of [dayBeforeStr, maxProtocolDate]) {
+        await saveCalorieOverride(userId, dateStr, MAX_PROTOCOL.calories, { protein: MAX_PROTOCOL.protein, fat: MAX_PROTOCOL.fat, carbs: MAX_PROTOCOL.carbs });
+        setCalorieOverrides?.(prev => ({ ...prev, [dateStr]: MAX_PROTOCOL.calories }));
+        setMacroOverrides?.(prev => ({ ...prev, [dateStr]: { protein: MAX_PROTOCOL.protein, fat: MAX_PROTOCOL.fat, carbs: MAX_PROTOCOL.carbs } }));
+      }
+      setMaxProtocolOpen(false);
+    } finally {
+      setMaxProtocolSaving(false);
+    }
+  }
 
   // Rounded here too, not just in the warm-up steps — every number in the
   // plan is barbell work, and the only way to actually change the weight
@@ -6023,6 +6122,81 @@ function parseImportCsv(text) {
   return { rows, errors };
 }
 
+// One-tap OAuth connect — sends the person to Google's consent screen
+// via api/google-health-auth.js, which redirects back through
+// api/google-health-callback.js once they grant access. No token or
+// secret ever touches the browser directly; this card only needs to
+// know the person's own Forge Log userId to pass through as `state`.
+function GoogleHealthConnectCard({ userId }) {
+  return (
+    <div className="ft-card" style={{ padding: 20, maxWidth: 460, marginBottom: 20 }}>
+      <div className="ft-label" style={{ marginBottom: 8 }}>Google Health (direct connection)</div>
+      <div style={{ fontSize: 12, color: COLORS.creamDim, lineHeight: 1.5, marginBottom: 12 }}>
+        Connects Forge Log directly to your Google Health account — Google pushes new data here automatically the moment your Fitbit syncs, no bridge app or phone-side setup needed. Requires your Google account to be added as a test user on the project first.
+      </div>
+      <a className="ft-btn ft-btn-primary" style={{ fontSize: 12, textDecoration: "none", display: "inline-block" }} href={`/api/google-health-auth?userId=${userId}`}>
+        Connect Google Health
+      </a>
+    </div>
+  );
+}
+
+// Shows the per-user sync URL for a Health Connect bridge app (or
+// anything else capable of a scheduled POST) to push resting heart
+// rate, sleep, steps, active zone minutes, and HRV into Forge Log —
+// see api/health-sync.js for the exact payload shape expected.
+// Token is created lazily on first visit to this card, not at signup.
+function HealthSyncCard({ userId }) {
+  const [token, setToken] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    getOrCreateSyncToken(userId).then(t => { if (!cancelled) { setToken(t); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  const syncUrl = token ? `${window.location.origin}/api/health-sync?token=${token}` : "";
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(syncUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {}
+  }
+
+  async function handleRegenerate() {
+    if (!window.confirm("This invalidates the current sync URL — anything still pointed at the old one will stop working until it's updated. Continue?")) return;
+    setLoading(true);
+    const t = await regenerateSyncToken(userId);
+    setToken(t);
+    setLoading(false);
+  }
+
+  return (
+    <div className="ft-card" style={{ padding: 20, maxWidth: 460, marginBottom: 20 }}>
+      <div className="ft-label" style={{ marginBottom: 8 }}>Health Data Sync</div>
+      <div style={{ fontSize: 12, color: COLORS.creamDim, lineHeight: 1.5, marginBottom: 12 }}>
+        Pulls in resting heart rate, sleep score/duration, steps, active zone minutes, and HRV from Google Health / Fitbit — via a Health Connect bridge app (Android) pointed at the URL below, sending a daily POST. Forge Log doesn't reach out and pull this itself; something on your end needs to push it here.
+      </div>
+      {loading ? (
+        <div style={{ fontSize: 12, color: COLORS.creamDim }}>Setting up your sync link…</div>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+            <input readOnly value={syncUrl} onFocus={e => e.target.select()} className="ft-input" style={{ flex: 1, fontSize: 11, fontFamily: "monospace" }} />
+            <button className="ft-btn ft-btn-primary" style={{ fontSize: 11, whiteSpace: "nowrap" }} onClick={handleCopy}>{copied ? "Copied!" : "Copy"}</button>
+          </div>
+          <button className="ft-btn ft-btn-ghost" style={{ fontSize: 11 }} onClick={handleRegenerate}>Reset sync link</button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeature, entries, onImportCsv, userId, workoutSessions }) {
   const adaptive = useMemo(() => computeAdaptiveTDEE(entries, profile.goalType), [entries, profile.goalType]);
   const [importPreview, setImportPreview] = useState(null); // { rows, errors, fileName }
@@ -6471,6 +6645,9 @@ function SettingsPanel({ profile, onChange, latestWeight, features, onToggleFeat
           Adds an RIR (0-10) field to every set in Daily Log, and weighs how hard your last session actually felt — not just whether you hit the top of the rep range — when suggesting your next weight. Hit the rep ceiling with RIR to spare and it'll suggest a bigger jump than usual; hit it at 1 RIR or less and it'll have you hold instead of piling on more. Off by default — the suggestion math is smarter either way, this just adds effort into the equation on top of that. Nothing you've already logged is affected either way.
         </div>
       </div>
+
+      <HealthSyncCard userId={userId} />
+      <GoogleHealthConnectCard userId={userId} />
 
       <div className="ft-card" style={{ padding: 20, maxWidth: 380, flex: 1, minWidth: 280 }}>
         <div className="ft-label" style={{ marginBottom: 4 }}>Features</div>
