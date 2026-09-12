@@ -16,12 +16,13 @@
 //   2. In the scope list on the left, manually enter:
 //      https://www.googleapis.com/auth/cloud-platform
 //   3. Click "Authorize APIs", sign in with the SAME Google account
-//      that owns the Cloud project (nifty-inn-508401-h8)
+//      that owns the Cloud project
 //   4. Click "Exchange authorization code for tokens"
-//   5. Copy the resulting Access token
 //
-// Then call THIS endpoint once:
-//   POST /api/register-google-health-subscriber?token=<access token from above>
+// Then in Step 3, set the URI to this endpoint and hit Send — NO need
+// to paste the token into the URL: OAuth Playground already attaches
+// the Step-2 access token as an `Authorization: Bearer` header to
+// every request automatically, and that's what this reads.
 //
 // Safe to call more than once if something needs adjusting — Google
 // rejects a duplicate subscriberId rather than creating a second one,
@@ -45,9 +46,19 @@ export default async function handler(req, res) {
     return;
   }
 
-  const adminToken = req.query?.token;
+  // Reads from the Authorization header — OAuth Playground already
+  // attaches this automatically to every request it sends ("The OAuth
+  // access token in Step 2 will be added to the Authorization header
+  // of the request"), so nothing needs to be manually pasted into the
+  // URL at all. Also sidesteps a real, easy-to-hit failure mode: a
+  // long access token pasted into a query string can pick up subtle
+  // corruption from URL encoding/decoding along the way, which
+  // presents as exactly the kind of confusing "invalid credential"
+  // error seen while debugging this.
+  const authHeader = req.headers.authorization || "";
+  const adminToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : (req.query?.token || null);
   if (!adminToken) {
-    res.status(400).json({ error: "Missing ?token= — see the comment at the top of this file for how to get one from OAuth Playground." });
+    res.status(400).json({ error: "Missing Authorization: Bearer <token> header (or a ?token= fallback)." });
     return;
   }
 
