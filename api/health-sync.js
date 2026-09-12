@@ -109,12 +109,18 @@ export default async function handler(req, res) {
   }
   console.log("health-sync received body:", JSON.stringify(body));
 
-  // Flat format (hand-built Shortcut): has a top-level "date" string
-  // and simple numeric fields — handled directly, no aggregation
-  // needed since it's already one value per metric for that one day.
-  if (typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date.trim())) {
-    body.date = body.date.trim();
-    const row = { user_id: tokenRow.user_id, date: body.date, synced_at: new Date().toISOString() };
+  // Flat format (hand-built Shortcut): steps/restingHeartRate/etc as
+  // simple fields — handled directly, no aggregation needed since it's
+  // already one value per metric for that one day. "date" is optional:
+  // if it's missing or didn't come through right (a real, observed
+  // failure mode — the Shortcut's Formatted Date variable arriving as
+  // an empty string), default to today's date server-side rather than
+  // rejecting the whole sync over one fragile field.
+  const isFlatFormat = ["steps", "restingHeartRate", "hrv", "activeZoneMinutes", "sleepDurationMinutes"].some(k => body[k] != null);
+  if (isFlatFormat) {
+    const validDate = typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date.trim());
+    const date = validDate ? body.date.trim() : new Date().toISOString().slice(0, 10);
+    const row = { user_id: tokenRow.user_id, date, synced_at: new Date().toISOString() };
     const fieldMap = {
       steps: "steps",
       restingHeartRate: "resting_heart_rate",
@@ -131,7 +137,7 @@ export default async function handler(req, res) {
       res.status(500).json({ error: "Failed to save" });
       return;
     }
-    res.status(200).json({ ok: true, date: body.date });
+    res.status(200).json({ ok: true, date });
     return;
   }
 
