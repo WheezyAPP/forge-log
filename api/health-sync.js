@@ -1,39 +1,27 @@
-// api/health-sync.js — receives a health-metrics sync from a Health
-// Connect / HealthKit bridge app (Health Webhook / HC Webhook, or
-// anything sending a similar shape), rather than Forge Log pulling
-// live from the Google Health API itself. That means no Google Cloud
-// project, no OAuth consent screen, no refresh-token handling on our
-// end — just an endpoint that trusts whoever holds the per-user token
-// in the URL, the same shared-secret style auth send-notifications.js
-// already uses for its own caller.
+// api/health-sync.js — receives a health-metrics sync from EITHER:
+//   (a) a hand-built iOS Shortcuts automation (Find Health Samples ->
+//       Get Contents of URL) sending one simple flat JSON object per
+//       sync, e.g.:
+//         { "date": "2026-09-11", "steps": 8500, "restingHeartRate": 58,
+//           "sleepDurationMinutes": 412, "activeZoneMinutes": 34, "hrv": 45 }
+//       This is the preferred, most reliable path — since the payload
+//       is hand-built rather than coming from an undocumented
+//       third-party app's format, there's no guessing involved: it
+//       matches this endpoint exactly because whoever builds the
+//       Shortcut types these exact field names into it.
+//   (b) a Health Connect / HealthKit bridge app sending arrays of
+//       individual timestamped records per data type (kept for
+//       compatibility, in case that path gets revisited later):
+//         { "steps": [{ "count": 1200, "startTime": "...", ... }], ... }
+//
+// Rather than Forge Log pulling live from the Google Health API
+// itself: no Google Cloud project, no OAuth consent screen, no
+// refresh-token handling on our end — just an endpoint that trusts
+// whoever holds the per-user token in the URL, the same shared-secret
+// style auth send-notifications.js already uses for its own caller.
 //
 // Vercel auto-detects any file in /api as a serverless function; no
 // extra config needed for that part.
-//
-// ACTUAL payload shape these bridge apps send (confirmed against the
-// underlying Health Connect/HealthKit record conventions, NOT the
-// flat single-value-per-day shape an earlier version of this file
-// assumed): one JSON object per sync, arrays of individual timestamped
-// records per data type, only the enabled types present at all:
-//   {
-//     "timestamp": "2026-09-11T08:00:00Z",
-//     "steps": [ { "count": 1200, "startTime": "...", "endTime": "..." }, ... ],
-//     "sleep": [ { "startTime": "...", "endTime": "...", "stage": "..." }, ... ],
-//     "heart_rate": [ { "bpm": 72, "time": "..." }, ... ],
-//     "resting_heart_rate": [ { "bpm": 58, "time": "..." }, ... ],
-//     "heart_rate_variability": [ { "value": 45, "time": "..." }, ... ]
-//   }
-// Each array is aggregated down into ONE daily row per calendar date
-// touched by that sync (a 48h lookback window can span two dates) —
-// steps summed, sleep durations summed, heart-rate-family metrics
-// averaged. No "sleep score" field: that's Fitbit's own proprietary
-// number and doesn't exist in the underlying record types these apps
-// read from, so it's never populated via this path.
-//
-// This is a best-informed reconstruction of the real format, not
-// something tested against an actual device — the FIRST real sync is
-// still worth checking against what actually lands in health_metrics,
-// in case field names differ slightly from what's assumed here.
 
 import { createClient } from "@supabase/supabase-js";
 
@@ -111,6 +99,32 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
 
+  // Flat format (hand-built Shortcut): has a top-level "date" string
+  // and simple numeric fields — handled directly, no aggregation
+  // needed since it's already one value per metric for that one day.
+  if (typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
+    const row = { user_id: tokenRow.user_id, date: body.date, synced_at: new Date().toISOString() };
+    const fieldMap = {
+      steps: "steps",
+      restingHeartRate: "resting_heart_rate",
+      hrv: "hrv",
+      activeZoneMinutes: "active_zone_minutes",
+      sleepDurationMinutes: "sleep_duration_minutes",
+    };
+    for (const [inKey, col] of Object.entries(fieldMap)) {
+      if (body[inKey] != null && !Number.isNaN(parseFloat(body[inKey]))) row[col] = parseFloat(body[inKey]);
+    }
+    const { error: upsertErr } = await supabase.from("health_metrics").upsert(row, { onConflict: "user_id,date" });
+    if (upsertErr) {
+      console.error("health-sync upsert (flat) failed:", upsertErr);
+      res.status(500).json({ error: "Failed to save" });
+      return;
+    }
+    res.status(200).json({ ok: true, date: body.date });
+    return;
+  }
+
+  // Otherwise, fall through to the array-based bridge-app format.
   const stepsPerDate = aggregateByDate(body.steps, "count", "startTime", "sum");
   const restingHrPerDate = aggregateByDate(body.resting_heart_rate, "bpm", "time", "avg");
   const hrvPerDate = aggregateByDate(body.heart_rate_variability, "value", "time", "avg");
