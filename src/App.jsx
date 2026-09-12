@@ -2848,6 +2848,15 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
   const healthDates = Object.keys(healthMetrics || {}).sort();
   const latestHealthDate = healthDates[healthDates.length - 1];
   const latestHealth = latestHealthDate ? healthMetrics[latestHealthDate] : null;
+  // Suggested macros and the fixed deficit/surplus targets are estimates
+  // derived purely from weight/calorie history — once real biometric
+  // data (steps, resting heart rate, or sleep) is actually being
+  // tracked, those estimate-only cards are redundant clutter rather
+  // than useful info, so they're hidden whenever any of the three is
+  // present (not requiring all three).
+  const hasImputedHealthData = latestHealth != null && (
+    latestHealth.steps != null || latestHealth.restingHeartRate != null || latestHealth.sleepDurationMinutes != null
+  );
 
   const goal = stats.suggestedCalories || 0;
   const consumed = e.caloriesConsumed || 0;
@@ -2905,114 +2914,13 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
             )}
           </div>
         </div>
-        <CoachNote notes={coachNotes} setTab={setTab} />
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, alignContent: "start" }}>
-        <Stat icon={<Flame size={16} color={COLORS.ember} />} label="Maintenance (TDEE)" value={`${fmt(stats.tdee)} cal`} swayDelay={-0.0} />
-        <Stat
-          icon={<Gauge size={16} color={COLORS.ember} />}
-          label="Suggested calories (goal)"
-          value={`${fmt(stats.suggestedCalories)} cal`}
-          sub={stats.dailyCalorieAdjustment !== 0 ? `${stats.dailyCalorieAdjustment > 0 ? "+" : ""}${fmt(stats.dailyCalorieAdjustment)} cal/day goal` : "goal: maintain"}
-          emphasized
-        />
-        <Stat icon={<Beef size={16} color={COLORS.mint} />} label="Suggested protein" value={`${fmt(stats.proteinG)} g`} swayDelay={-0.3} />
-        <Stat icon={<Wheat size={16} color={COLORS.amber} />} label="Suggested carbs" value={`${fmt(stats.carbG)} g`} swayDelay={-0.9} />
-        <Stat icon={<Droplet size={16} color={COLORS.ember} />} label="Suggested fat" value={`${fmt(stats.fatG)} g`} swayDelay={-1.2} />
-        <Stat
-          icon={<Gauge size={16} color={COLORS.mint} />}
-          label={avgBalance < 0 ? "Avg deficit / 7d" : avgBalance > 0 ? "Avg surplus / 7d" : "Avg balance / 7d"}
-          value={`${fmt(Math.abs(avgBalance))} cal`}
-          swayDelay={-0.6}
-        />
-        {features?.water && (() => {
-          const todayWaterOz = (e.water_logs || []).reduce((s, w) => s + (parseFloat(w.amountOz) || 0), 0);
-          const satPct = computeCreatineSaturation(entries, 28, profile.creatineAlreadySaturated).pct;
-          const waterGoalOz = computeWaterGoalOz(profile, e.weight, (e.creatine || 0) > 0, satPct);
-          const waterRemainingOz = waterGoalOz - todayWaterOz;
-          return (
-            <div className="ft-card" style={{ padding: 14, display: "flex", alignItems: "center", gap: 12 }}>
-              <WaterRing size={52} strokeWidth={6} consumed={todayWaterOz} goal={waterGoalOz} gradId="dashWaterRingGrad" celebrate={todayWaterOz >= waterGoalOz && waterGoalOz > 0} />
-              <div>
-                <div className="ft-label" style={{ marginBottom: 2 }}>Water today</div>
-                <div className="ft-mono" style={{ fontSize: 16, fontWeight: 700 }}>{fmt(todayWaterOz)} <span style={{ fontSize: 11, color: COLORS.creamDim, fontWeight: 400 }}>/ {fmt(waterGoalOz)} oz</span></div>
-                <div style={{ fontSize: 10.5, color: COLORS.creamDim, marginTop: 1 }}>
-                  {waterRemainingOz > 0 ? `${fmt(waterRemainingOz)} oz remaining` : "Goal hit ✓"}
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-        {isBodyFatVisible(profile) && (
-          <Stat
-            icon={<TrendingDown size={16} color={COLORS.amber} />}
-            label="Est. body fat %"
-            value={`${fmt(stats.bodyFatPct, 1)}%`}
-            sub={
-              stats.navyEligible && profile.bodyFatMethod === "navy" ? "Navy circumference method"
-              : stats.navyEligible && profile.bodyFatMethod === "blend" ? "formula + waist/neck blend"
-              : stats.navyEligible ? "more accurate methods available — see Settings"
-              : profile.gender === "male" ? "log neck & waist for a better estimate"
-              : "formula-based"
-            }
-            swayDelay={-1.2}
-          />
-        )}
-        <Stat icon={<Droplet size={16} color={COLORS.ember} />} label="Est. fat mass" value={`${fmt(stats.fatLbs, 1)} lbs`} sub={`lean: ${fmt(stats.leanLbs, 1)} lbs`} swayDelay={-1.8} />
-        <Stat icon={<TrendingDown size={16} color={COLORS.mint} />} label="Deficit target (fixed)" value={`${fmt(stats.deficitTarget)} cal`} swayDelay={-2.4} />
-        <Stat icon={<TrendingUp size={16} color={COLORS.amber} />} label="Surplus target (fixed)" value={`${fmt(stats.surplusTarget)} cal`} swayDelay={-3.0} />
-
-        {(() => {
-          const grade = calcAttendanceGrade(userSplitId, workoutSessions || [], splitStartedOn);
-          const rawGrade = calcRawAttendanceGrade(workoutSessions || []);
-          const split = SPLITS.find(s => s.id === userSplitId);
-          if (!grade && !rawGrade) return null;
-
-          return (
-            <div className="ft-mobile-stack" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, gridColumn: "1 / -1" }}>
-              {grade && (
-                <GradeCard
-                  g={grade}
-                  title="Split adherence"
-                  sub={`${split?.name} · ${grade.actual}/${grade.expected} split days`}
-                  windowLabel={`${grade.pct}%`}
-                  explain="Only counts sessions logged under your current split, and only from the day you locked it in — not the full 28 days if you switched recently. Strict on purpose: this is specifically about how you're doing on the split you picked."
-                />
-              )}
-              {rawGrade && (
-                <GradeCard
-                  g={rawGrade}
-                  title="Overall consistency"
-                  sub={`Any logged session, any split · last ${rawGrade.windowDays} days`}
-                  windowLabel={`${rawGrade.actual}/${rawGrade.windowDays}d`}
-                  explain="Counts any logged workout day over the last 30 days, regardless of which split it was under. Graded by day-count, not percentage of every calendar day — nobody trains 7 days a week, so ~4x/week (about 17 sessions) is already where 'A' starts."
-                />
-              )}
-            </div>
-          );
-        })()}
-
-        <div className="ft-card" style={{ padding: 16, gridColumn: "1 / -1" }}>
-          <div className="ft-label">Protein — {fmt(e.protein)}g of {fmt(stats.proteinG)}g target</div>
-          <div style={{ background: COLORS.bg, borderRadius: 8, height: 10, overflow: "hidden", marginTop: 6 }}>
-            <div style={{ width: `${proteinPct}%`, height: "100%", background: COLORS.ember, transition: "width 0.3s ease" }} />
-          </div>
-          <div style={{ display: "flex", gap: 18, marginTop: 12, flexWrap: "wrap" }}>
-            <MacroChip label="Protein" value={`${fmt(e.protein)}g`} target={`${fmt(stats.proteinG)}g`} color={COLORS.ember} />
-            <MacroChip label="Carbs" value={`${fmt(e.carbs)}g`} target={`${fmt(stats.carbG)}g`} color={COLORS.amber} />
-            <MacroChip label="Fat" value={`${fmt(e.fat)}g`} target={`${fmt(stats.fatG)}g`} color={COLORS.mint} />
-            {e.creatine ? <MacroChip label="Creatine" value={`${fmt(e.creatine)}g`} color={COLORS.creamDim} /> : null}
-          </div>
-        </div>
-
         {googleHealthConnection && (() => {
           const STEP_GOAL = 10000;
           const steps = latestHealth?.steps ?? null;
           const sleepMin = latestHealth?.sleepDurationMinutes ?? null;
           const isToday = latestHealthDate === latestDate;
           return (
-            <div className="ft-card" style={{ padding: 16, gridColumn: "1 / -1" }}>
+            <div className="ft-card" style={{ padding: 16, marginTop: 12 }}>
               <div className="ft-label" style={{ marginBottom: 12 }}>
                 Google Health / Fitbit{latestHealth ? ` — ${isToday ? "today" : prettyDate(latestHealthDate)}` : ""}
               </div>
@@ -3062,6 +2970,114 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
           );
         })()}
       </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, alignContent: "start" }}>
+        <Stat icon={<Flame size={16} color={COLORS.ember} />} label="Maintenance (TDEE)" value={`${fmt(stats.tdee)} cal`} swayDelay={-0.0} />
+        <Stat
+          icon={<Gauge size={16} color={COLORS.ember} />}
+          label="Suggested calories (goal)"
+          value={`${fmt(stats.suggestedCalories)} cal`}
+          sub={stats.dailyCalorieAdjustment !== 0 ? `${stats.dailyCalorieAdjustment > 0 ? "+" : ""}${fmt(stats.dailyCalorieAdjustment)} cal/day goal` : "goal: maintain"}
+          emphasized
+        />
+        {!hasImputedHealthData && (
+          <>
+            <Stat icon={<Beef size={16} color={COLORS.mint} />} label="Suggested protein" value={`${fmt(stats.proteinG)} g`} swayDelay={-0.3} />
+            <Stat icon={<Wheat size={16} color={COLORS.amber} />} label="Suggested carbs" value={`${fmt(stats.carbG)} g`} swayDelay={-0.9} />
+            <Stat icon={<Droplet size={16} color={COLORS.ember} />} label="Suggested fat" value={`${fmt(stats.fatG)} g`} swayDelay={-1.2} />
+          </>
+        )}
+        <Stat
+          icon={<Gauge size={16} color={COLORS.mint} />}
+          label={avgBalance < 0 ? "Avg deficit / 7d" : avgBalance > 0 ? "Avg surplus / 7d" : "Avg balance / 7d"}
+          value={`${fmt(Math.abs(avgBalance))} cal`}
+          swayDelay={-0.6}
+        />
+        {features?.water && (() => {
+          const todayWaterOz = (e.water_logs || []).reduce((s, w) => s + (parseFloat(w.amountOz) || 0), 0);
+          const satPct = computeCreatineSaturation(entries, 28, profile.creatineAlreadySaturated).pct;
+          const waterGoalOz = computeWaterGoalOz(profile, e.weight, (e.creatine || 0) > 0, satPct);
+          const waterRemainingOz = waterGoalOz - todayWaterOz;
+          return (
+            <div className="ft-card" style={{ padding: 14, display: "flex", alignItems: "center", gap: 12 }}>
+              <WaterRing size={52} strokeWidth={6} consumed={todayWaterOz} goal={waterGoalOz} gradId="dashWaterRingGrad" celebrate={todayWaterOz >= waterGoalOz && waterGoalOz > 0} />
+              <div>
+                <div className="ft-label" style={{ marginBottom: 2 }}>Water today</div>
+                <div className="ft-mono" style={{ fontSize: 16, fontWeight: 700 }}>{fmt(todayWaterOz)} <span style={{ fontSize: 11, color: COLORS.creamDim, fontWeight: 400 }}>/ {fmt(waterGoalOz)} oz</span></div>
+                <div style={{ fontSize: 10.5, color: COLORS.creamDim, marginTop: 1 }}>
+                  {waterRemainingOz > 0 ? `${fmt(waterRemainingOz)} oz remaining` : "Goal hit ✓"}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+        {isBodyFatVisible(profile) && (
+          <Stat
+            icon={<TrendingDown size={16} color={COLORS.amber} />}
+            label="Est. body fat %"
+            value={`${fmt(stats.bodyFatPct, 1)}%`}
+            sub={
+              stats.navyEligible && profile.bodyFatMethod === "navy" ? "Navy circumference method"
+              : stats.navyEligible && profile.bodyFatMethod === "blend" ? "formula + waist/neck blend"
+              : stats.navyEligible ? "more accurate methods available — see Settings"
+              : profile.gender === "male" ? "log neck & waist for a better estimate"
+              : "formula-based"
+            }
+            swayDelay={-1.2}
+          />
+        )}
+        <Stat icon={<Droplet size={16} color={COLORS.ember} />} label="Est. fat mass" value={`${fmt(stats.fatLbs, 1)} lbs`} sub={`lean: ${fmt(stats.leanLbs, 1)} lbs`} swayDelay={-1.8} />
+        {!hasImputedHealthData && (
+          <>
+            <Stat icon={<TrendingDown size={16} color={COLORS.mint} />} label="Deficit target (fixed)" value={`${fmt(stats.deficitTarget)} cal`} swayDelay={-2.4} />
+            <Stat icon={<TrendingUp size={16} color={COLORS.amber} />} label="Surplus target (fixed)" value={`${fmt(stats.surplusTarget)} cal`} swayDelay={-3.0} />
+          </>
+        )}
+
+        {(() => {
+          const grade = calcAttendanceGrade(userSplitId, workoutSessions || [], splitStartedOn);
+          const rawGrade = calcRawAttendanceGrade(workoutSessions || []);
+          const split = SPLITS.find(s => s.id === userSplitId);
+          if (!grade && !rawGrade) return null;
+
+          return (
+            <div className="ft-mobile-stack" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, gridColumn: "1 / -1" }}>
+              {grade && (
+                <GradeCard
+                  g={grade}
+                  title="Split adherence"
+                  sub={`${split?.name} · ${grade.actual}/${grade.expected} split days`}
+                  windowLabel={`${grade.pct}%`}
+                  explain="Only counts sessions logged under your current split, and only from the day you locked it in — not the full 28 days if you switched recently. Strict on purpose: this is specifically about how you're doing on the split you picked."
+                />
+              )}
+              {rawGrade && (
+                <GradeCard
+                  g={rawGrade}
+                  title="Overall consistency"
+                  sub={`Any logged session, any split · last ${rawGrade.windowDays} days`}
+                  windowLabel={`${rawGrade.actual}/${rawGrade.windowDays}d`}
+                  explain="Counts any logged workout day over the last 30 days, regardless of which split it was under. Graded by day-count, not percentage of every calendar day — nobody trains 7 days a week, so ~4x/week (about 17 sessions) is already where 'A' starts."
+                />
+              )}
+            </div>
+          );
+        })()}
+
+        <div className="ft-card" style={{ padding: 16, gridColumn: "1 / -1" }}>
+          <div className="ft-label">Protein — {fmt(e.protein)}g of {fmt(stats.proteinG)}g target</div>
+          <div style={{ background: COLORS.bg, borderRadius: 8, height: 10, overflow: "hidden", marginTop: 6 }}>
+            <div style={{ width: `${proteinPct}%`, height: "100%", background: COLORS.ember, transition: "width 0.3s ease" }} />
+          </div>
+          <div style={{ display: "flex", gap: 18, marginTop: 12, flexWrap: "wrap" }}>
+            <MacroChip label="Protein" value={`${fmt(e.protein)}g`} target={`${fmt(stats.proteinG)}g`} color={COLORS.ember} />
+            <MacroChip label="Carbs" value={`${fmt(e.carbs)}g`} target={`${fmt(stats.carbG)}g`} color={COLORS.amber} />
+            <MacroChip label="Fat" value={`${fmt(e.fat)}g`} target={`${fmt(stats.fatG)}g`} color={COLORS.mint} />
+            {e.creatine ? <MacroChip label="Creatine" value={`${fmt(e.creatine)}g`} color={COLORS.creamDim} /> : null}
+          </div>
+        </div>
+      </div>
+      <CoachNote notes={coachNotes} setTab={setTab} />
     </div>
   );
 }
