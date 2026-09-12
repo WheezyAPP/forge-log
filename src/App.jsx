@@ -101,6 +101,7 @@ import {
   declineSplitShare,
   fetchUsers,
   loadHealthMetrics,
+  loadGoogleHealthConnection,
   getOrCreateSyncToken,
   regenerateSyncToken,
   getUserSplitId,
@@ -1547,6 +1548,11 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
     if (!userId) return;
     loadHealthMetrics(userId).then(setHealthMetrics);
   }, [userId]);
+  const [googleHealthConnection, setGoogleHealthConnection] = useState(null);
+  useEffect(() => {
+    if (!userId) return;
+    loadGoogleHealthConnection(userId).then(setGoogleHealthConnection);
+  }, [userId]);
   const [weighIns, setWeighIns] = useState({});  // { "2026-07-01": [{id,time,weight,tag},...] }
   const [userSplitId, setUserSplitIdState] = useState(null);
   const [partnerMode, setPartnerMode] = useState(false);
@@ -2220,6 +2226,7 @@ function MainApp({ userId, userName, avatarData, onSwitchUser, onRenameUser }) {
           calorieOverrides={calorieOverrides}
           macroOverrides={macroOverrides}
           healthMetrics={healthMetrics}
+          googleHealthConnection={googleHealthConnection}
         />
       )}
 
@@ -2810,7 +2817,7 @@ function OnboardingBanner({ userId, setTab }) {
   );
 }
 
-function Dashboard({ entries, sortedDates, latestDate, profile, chartData, workoutSessions, userSplitId, splitStartedOn, features, setTab, userId, calorieOverrides, macroOverrides, healthMetrics }) {
+function Dashboard({ entries, sortedDates, latestDate, profile, chartData, workoutSessions, userSplitId, splitStartedOn, features, setTab, userId, calorieOverrides, macroOverrides, healthMetrics, googleHealthConnection }) {
   if (!latestDate) {
     return (
       <div>
@@ -2999,33 +3006,61 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
           </div>
         </div>
 
-        {latestHealth && (
-          <div className="ft-card" style={{ padding: 16, gridColumn: "1 / -1" }}>
-            <div className="ft-label" style={{ marginBottom: 10 }}>
-              Synced from Google Health / Fitbit — {latestHealthDate === latestDate ? "today" : prettyDate(latestHealthDate)}
+        {googleHealthConnection && (() => {
+          const STEP_GOAL = 10000;
+          const steps = latestHealth?.steps ?? null;
+          const sleepMin = latestHealth?.sleepDurationMinutes ?? null;
+          const isToday = latestHealthDate === latestDate;
+          return (
+            <div className="ft-card" style={{ padding: 16, gridColumn: "1 / -1" }}>
+              <div className="ft-label" style={{ marginBottom: 12 }}>
+                Google Health / Fitbit{latestHealth ? ` — ${isToday ? "today" : prettyDate(latestHealthDate)}` : ""}
+              </div>
+              {!latestHealth ? (
+                <div style={{ fontSize: 12, color: COLORS.creamDim }}>
+                  Connected — waiting on the first sync from Google. This can take a little while after connecting; nothing to do but check back.
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "center" }}>
+                  {steps != null && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                      <div style={{ position: "relative", width: 72, height: 72, flexShrink: 0 }}>
+                        <WaterRing size={72} strokeWidth={8} consumed={steps} goal={STEP_GOAL} gradId="stepsRingGrad" celebrate={steps >= STEP_GOAL} />
+                        <Footprints size={20} color={COLORS.amber} style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)" }} />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 9, color: COLORS.creamDim, textTransform: "uppercase", letterSpacing: "0.03em" }}>Steps</div>
+                        <div className="ft-mono" style={{ fontSize: 20, fontWeight: 800 }}>{fmt(steps)}</div>
+                        <div style={{ fontSize: 10.5, color: COLORS.creamDim }}>of {fmt(STEP_GOAL)} goal</div>
+                      </div>
+                    </div>
+                  )}
+                  {sleepMin != null && (
+                    <div>
+                      <div style={{ fontSize: 9, color: COLORS.creamDim, textTransform: "uppercase", letterSpacing: "0.03em", display: "flex", alignItems: "center", gap: 4 }}>
+                        <Moon size={11} /> Sleep
+                      </div>
+                      <div className="ft-mono" style={{ fontSize: 20, fontWeight: 800, color: COLORS.mint }}>
+                        {Math.floor(sleepMin / 60)}h {Math.round(sleepMin % 60)}m
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+                    {latestHealth.restingHeartRate != null && (
+                      <MacroChip label="Resting HR" value={`${fmt(latestHealth.restingHeartRate)} bpm`} color={COLORS.warn} icon={<HeartPulse size={13} />} />
+                    )}
+                    {latestHealth.activeZoneMinutes != null && (
+                      <MacroChip label="Active zone min" value={fmt(latestHealth.activeZoneMinutes)} color={COLORS.ember} icon={<Zap size={13} />} />
+                    )}
+                    {latestHealth.hrv != null && (
+                      <MacroChip label="HRV" value={`${fmt(latestHealth.hrv)} ms`} color={COLORS.creamDim} icon={<Activity size={13} />} />
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-            <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
-              {latestHealth.restingHeartRate != null && (
-                <MacroChip label="Resting HR" value={`${fmt(latestHealth.restingHeartRate)} bpm`} color={COLORS.warn} icon={<HeartPulse size={13} />} />
-              )}
-              {latestHealth.sleepScore != null && (
-                <MacroChip label="Sleep score" value={fmt(latestHealth.sleepScore)} color={COLORS.mint} icon={<Moon size={13} />} />
-              )}
-              {latestHealth.sleepDurationMinutes != null && (
-                <MacroChip label="Sleep" value={`${Math.floor(latestHealth.sleepDurationMinutes / 60)}h ${Math.round(latestHealth.sleepDurationMinutes % 60)}m`} color={COLORS.mint} icon={<Moon size={13} />} />
-              )}
-              {latestHealth.steps != null && (
-                <MacroChip label="Steps" value={fmt(latestHealth.steps)} color={COLORS.amber} icon={<Footprints size={13} />} />
-              )}
-              {latestHealth.activeZoneMinutes != null && (
-                <MacroChip label="Active zone min" value={fmt(latestHealth.activeZoneMinutes)} color={COLORS.ember} icon={<Zap size={13} />} />
-              )}
-              {latestHealth.hrv != null && (
-                <MacroChip label="HRV" value={`${fmt(latestHealth.hrv)} ms`} color={COLORS.creamDim} icon={<Activity size={13} />} />
-              )}
-            </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );

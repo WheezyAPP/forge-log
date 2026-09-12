@@ -75,6 +75,28 @@ function healthMetricFromRow(row) {
 // Promise.all load, same reasoning as pendingShares: this is externally-
 // arriving data on its own schedule, not something that needs to block
 // the rest of the app loading.
+// Whether this user has actually gone through the OAuth "Connect
+// Google Health" flow — distinct from whether health_metrics has any
+// rows, since that table can also be populated by the bridge-app sync
+// path (api/health-sync.js), which never touches this table at all.
+// Used to gate UI that's specifically about the direct Google Health
+// connection, not health data in general.
+export async function loadGoogleHealthConnection(userId) {
+  if (!userId) return null;
+  try {
+    const { data, error } = await supabase
+      .from("google_health_connections")
+      .select("health_user_id, connected_at")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? { healthUserId: data.health_user_id, connectedAt: data.connected_at } : null;
+  } catch (e) {
+    console.error("loadGoogleHealthConnection failed:", e);
+    return null;
+  }
+}
+
 export async function loadHealthMetrics(userId, days = 30) {
   if (!userId) return {};
   try {
