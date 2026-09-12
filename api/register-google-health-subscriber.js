@@ -27,7 +27,7 @@
 // rejects a duplicate subscriberId rather than creating a second one,
 // and the error message says exactly that if it happens.
 
-const PROJECT_ID = "nifty-inn-508401-h8";
+const PROJECT_ID = "august-button-508403-a7";
 const SUBSCRIBER_ID = "forge-log-main";
 const WEBHOOK_SECRET = process.env.GOOGLE_HEALTH_WEBHOOK_SECRET;
 
