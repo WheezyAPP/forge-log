@@ -4,8 +4,8 @@
   "description": "Calorie, macro, and training tracker",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#161512",
-  "theme_color": "#161512",
+  "background_color": "#1C1E26",
+  "theme_color": "#1C1E26",
   "icons": [
     {
       "src": "/icon-192.png",

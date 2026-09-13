@@ -103,46 +103,69 @@ const MAX_OP_RETRIES = 5;
 // Genuine failures (browser online, but the write itself failed) are
 // logged and surfaced via onQueueError instead of swallowed, since a
 // silent failure here is exactly what makes "stuck syncing" undebuggable.
+// Removes one op by id from the CURRENT stored queue, not from a stale
+// snapshot — see the note in flushQueue below for why that distinction
+// is the whole point of these two helpers.
+function removeOpById(id) {
+  writeQueue(readQueue().filter(o => o.id !== id));
+}
+
+function updateOpById(id, patch) {
+  writeQueue(readQueue().map(o => (o.id === id ? { ...o, ...patch } : o)));
+}
+
 export async function flushQueue(executors) {
   if (flushing) return;
   if (!isOnline()) return;
   flushing = true;
   try {
-    let queue = readQueue();
     let madeProgress = false;
-    while (queue.length > 0) {
+    // Re-read from localStorage on EVERY iteration rather than holding a
+    // snapshot across the awaits below. The old version read the queue
+    // once, then did `queue = queue.slice(1); writeQueue(queue)` after
+    // each `await fn(...)` — so any op enqueued DURING that await (a
+    // failed save while online, which is exactly what enqueueOp is for)
+    // got written to localStorage by enqueueOp and then immediately
+    // overwritten by this stale array. The write vanished with no error
+    // and no retry — silent data loss in the one file whose entire job
+    // is preventing it.
+    //
+    // Same root cause as the overlapping-auto-save duplicate bug in
+    // SplitDashboard (a stale in-memory view of state that something
+    // else mutated mid-flight), and the same shape of fix: treat the
+    // stored queue as the single source of truth and address ops by id
+    // instead of by position.
+    while (true) {
+      const queue = readQueue();
+      if (queue.length === 0) break;
       const op = queue[0];
       const fn = executors[op.type];
       if (!fn) {
         // Unknown op type (e.g. queued by an older app version) — drop it
         // rather than block the whole queue forever.
-        queue = queue.slice(1);
-        writeQueue(queue);
+        removeOpById(op.id);
         continue;
       }
       try {
         await fn(...op.args);
-        queue = queue.slice(1);
-        writeQueue(queue);
+        removeOpById(op.id);
         madeProgress = true;
       } catch (e) {
         const failCount = (op.failCount || 0) + 1;
         console.error(`Sync failed for queued "${op.type}" (attempt ${failCount}):`, e);
         if (failCount >= MAX_OP_RETRIES) {
           console.error(`Giving up on queued "${op.type}" after ${failCount} failed attempts — dropping it so the rest of the queue can proceed:`, op);
-          queue = queue.slice(1);
-          writeQueue(queue);
+          removeOpById(op.id);
           notifyError({ type: op.type, message: `Gave up after ${failCount} attempts: ${e?.message || String(e)}`, dropped: true, ts: Date.now() });
           madeProgress = true;
           continue; // keep going — try the next op instead of stopping here
         }
-        queue[0] = { ...op, failCount };
-        writeQueue(queue);
+        updateOpById(op.id, { failCount });
         notifyError({ type: op.type, message: e?.message || String(e), ts: Date.now() });
         break; // still within retry budget — stop and let it try again later
       }
     }
-    if (madeProgress && queue.length === 0) notifyError(null);
+    if (madeProgress && readQueue().length === 0) notifyError(null);
   } finally {
     flushing = false;
   }

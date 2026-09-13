@@ -102,11 +102,11 @@ export default function ToastStack() {
                   color: style.iconColor,
                   cursor: "pointer",
                   borderRadius: 7,
-                  padding: "4px 10px",
-                  fontSize: 12.5,
+                  padding: "0 14px",
+                  minHeight: "var(--ft-touch)",
+                  fontSize: 13,
                   fontWeight: 700,
                   flexShrink: 0,
-                  marginTop: -1,
                 }}
               >
                 {t.action.label}
@@ -115,15 +115,12 @@ export default function ToastStack() {
             <button
               onClick={() => dismiss(t.id)}
               aria-label="Dismiss"
+              className="ft-icon-btn"
               style={{
-                background: "none",
-                border: "none",
                 color: "#9CA1B5",
-                cursor: "pointer",
-                padding: 4,
-                marginTop: -2,
-                marginRight: -4,
-                flexShrink: 0,
+                marginTop: -10,
+                marginRight: -10,
+                marginBottom: -10,
               }}
             >
               <X size={15} />

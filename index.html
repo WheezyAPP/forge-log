@@ -2,12 +2,28 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+    <!-- No `maximum-scale=1` here on purpose. It used to be present, which
+         blocks pinch-zoom outright on Android and in iOS standalone mode
+         (the way this app is actually used — Safari-in-a-tab ignores it,
+         so the problem never showed up in browser testing). The usual
+         reason to add it is stopping iOS from auto-zooming when an input
+         gets focus, but that's already handled properly by the
+         `font-size: 16px` rule on .ft-input/.ft-select in App.jsx — so
+         this was costing zoom for nothing. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Forge Log</title>
 
     <!-- PWA / iOS "Add to Home Screen" support -->
+    <!-- The background color below, the one on <body>, and
+         background_color/theme_color in public/manifest.json must all stay
+         equal to COLORS.bg in App.jsx (#1C1E26). They used to be three
+         different values (#161512 in the manifest — a leftover from the
+         pre-redesign warm palette — #212230 here, #1C1E26 in the app), so
+         every cold launch of the installed app visibly stepped through
+         splash -> pre-React paint -> app, two color shifts before the
+         first screen settled. -->
     <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#212230" />
+    <meta name="theme-color" content="#1C1E26" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -30,7 +46,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
   </head>
-  <body style="margin:0; background:#212230;">
+  <body style="margin:0; background:#1C1E26;">
     <div id="root"></div>
     <noscript style="color:#e8e8f0; font-family:sans-serif; display:block; padding:2rem; text-align:center;">
       Forge Log needs JavaScript enabled to run.

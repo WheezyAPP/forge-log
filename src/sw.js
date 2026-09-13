@@ -16,6 +16,37 @@ import { CacheableResponsePlugin } from "workbox-cacheable-response";
 // globPatterns config, just expressed as a real call now.
 precacheAndRoute(self.__WB_MANIFEST);
 
+// ── Update handling ──────────────────────────────────────────────────
+// vite.config.js sets `registerType: "autoUpdate"`, but that only wires
+// itself up automatically in generateSW mode. In injectManifest mode
+// (which this app needs, for the push handlers below) Workbox injects
+// NOTHING of the sort — the custom service worker has to opt in, and
+// this one never did. The result: every deploy installed correctly,
+// then parked in the "waiting" state forever while the OLD bundle kept
+// serving. Since an installed PWA is basically never fully closed, the
+// waiting worker had no moment to take over — which is the real reason
+// pushes appeared to "not deploy" and needed a hard refresh or an
+// incognito window to show up.
+//
+// Three pieces, all required:
+//   1. the SKIP_WAITING message handler, which is what the page's
+//      registration script actually posts when it detects an update
+//   2. skipWaiting() on install, so a new worker doesn't wait on a
+//      client that will never close
+//   3. clients.claim() on activate, so the already-open page starts
+//      being controlled by the new worker instead of only the next one
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
+});
+
+self.addEventListener("install", () => {
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 // Supabase reads (GET requests) get cached so the last-known data is
 // available offline too — falls back to cache if the network request
 // takes longer than 5s or fails outright. Carried over unchanged from

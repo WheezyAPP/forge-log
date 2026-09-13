@@ -317,7 +317,7 @@ export default function GroupTrainingBoard({
                               onChange={e => updateDraftSet(person, index, ex.exercise, ex.grp, si, { r: e.target.value })}
                               style={{ flex: 1, padding: "6px 8px", fontSize: 13 }}
                             />
-                            <button onClick={() => removeDraftSet(person, index, ex.exercise, si)} aria-label="Remove set" style={{ background: "none", border: "none", color: C.creamDim, cursor: "pointer", padding: 2 }}><XIcon size={12} /></button>
+                            <button onClick={() => removeDraftSet(person, index, ex.exercise, si)} aria-label="Remove set" className="ft-icon-btn-sm" style={{ color: C.creamDim }}><XIcon size={15} /></button>
                           </div>
                         );
                       })}

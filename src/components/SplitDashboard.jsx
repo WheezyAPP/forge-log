@@ -15,7 +15,8 @@ import {
   insertWorkoutSessions, deleteWorkoutSessionsForDate,
 } from "../lib/storage";
 import { EXERCISE_LINKS } from "../overload/exerciseLinks";
-import { toastError } from "../lib/toast";
+import { toastError, toastUndo } from "../lib/toast";
+import { useScrollLock } from "../lib/scrollLock";
 import { REPS_ONLY_EXERCISES } from "../lib/groupTraining";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -390,6 +391,12 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
   // to the other person's saved plans and shouldn't default to
   // whichever was picked last time without a look.
   const [sharingTemplate, setSharingTemplate] = useState(null);
+
+  // One call covering all five of this component's overlays — the lock
+  // is reference-counted, so overlapping opens/closes are safe.
+  useScrollLock(
+    !!swapOpen || offSplitPickerOpen || !!optionalDayPickerOpen || !!browseOpen || !!sharingTemplate
+  );
   const [sharingForced, setSharingForced] = useState(false);
 
   function applyTemplate(template) {
@@ -643,9 +650,39 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
     setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, sets: [...b.sets, { w:"", r:"", rpe:"" }] }));
     setDirty(true);
   }
+  // Undoable. The X sits inches from the reps field in a cramped grid,
+  // there's no confirm step, and because this mutates `blocks` the
+  // auto-save effect picks it up about a second later and runs its
+  // delete-then-reinsert cycle — so a mis-tap didn't just clear the row
+  // on screen, it removed the set from Supabase too. The toast is the
+  // same toastUndo helper the delete flows elsewhere already use.
   function removeSet(bi, si) {
+    // Read from the CURRENT render's state, not from inside the setBlocks
+    // updater. React 18 doesn't invoke that updater synchronously — it
+    // runs during the next render, well after this function returns — so
+    // assigning to a local from inside it would leave the check below
+    // reading null every time and the undo toast would never appear.
+    // (StrictMode also double-invokes updaters in dev, which is a second
+    // reason not to put side effects in one.)
+    const removed = blocks[bi]?.sets?.[si] ?? null;
     setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, sets: b.sets.filter((_,j) => j!==si) }));
     setDirty(true);
+    // Only worth offering on a set that actually had something typed in
+    // it — undoing an empty row is just noise.
+    if (removed && (removed.w || removed.r)) {
+      toastUndo("Set removed", {
+        label: "Undo",
+        onClick: () => {
+          setBlocks(prev => prev.map((b,i) => {
+            if (i !== bi) return b;
+            const sets = [...b.sets];
+            sets.splice(Math.min(si, sets.length), 0, removed);
+            return { ...b, sets };
+          }));
+          setDirty(true);
+        },
+      });
+    }
   }
   // Deletes a whole exercise from today's workout — distinct from
   // removeSet, which only drops one set. Needed for split days that
@@ -1254,8 +1291,8 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
             return (
               <div key={bi} className="ft-card-raised" style={{ padding:12, marginBottom:8, opacity:0.75, display:"flex", gap:8 }}>
                 <div style={{ display:"flex", flexDirection:"column", gap:2, flexShrink:0 }}>
-                  <button onClick={() => moveBlock(bi, -1)} disabled={bi === 0} aria-label="Move up" style={{ background:"none", border:"none", color:C.creamDim, cursor: bi===0?"default":"pointer", opacity: bi===0?0.3:1, padding:2 }}><ChevronUp size={16}/></button>
-                  <button onClick={() => moveBlock(bi, 1)} disabled={bi === blocks.length-1} aria-label="Move down" style={{ background:"none", border:"none", color:C.creamDim, cursor: bi===blocks.length-1?"default":"pointer", opacity: bi===blocks.length-1?0.3:1, padding:2 }}><ChevronDown size={16}/></button>
+                  <button className="ft-icon-btn-sm" onClick={() => moveBlock(bi, -1)} disabled={bi === 0} aria-label="Move up" style={{ color:C.creamDim, opacity: bi===0?0.3:1, minHeight:38 }}><ChevronUp size={18}/></button>
+                  <button className="ft-icon-btn-sm" onClick={() => moveBlock(bi, 1)} disabled={bi === blocks.length-1} aria-label="Move down" style={{ color:C.creamDim, opacity: bi===blocks.length-1?0.3:1, minHeight:38 }}><ChevronDown size={18}/></button>
                 </div>
                 <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
@@ -1282,8 +1319,8 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
           return (
             <div key={bi} className="ft-card-raised" style={{ padding:12, marginBottom:8, border: isDeload ? `1px solid ${C.warn}` : undefined, display:"flex", gap:8 }}>
               <div style={{ display:"flex", flexDirection:"column", gap:2, flexShrink:0 }}>
-                <button onClick={() => moveBlock(bi, -1)} disabled={bi === 0} aria-label="Move up" style={{ background:"none", border:"none", color:C.creamDim, cursor: bi===0?"default":"pointer", opacity: bi===0?0.3:1, padding:2 }}><ChevronUp size={16}/></button>
-                <button onClick={() => moveBlock(bi, 1)} disabled={bi === blocks.length-1} aria-label="Move down" style={{ background:"none", border:"none", color:C.creamDim, cursor: bi===blocks.length-1?"default":"pointer", opacity: bi===blocks.length-1?0.3:1, padding:2 }}><ChevronDown size={16}/></button>
+                <button className="ft-icon-btn-sm" onClick={() => moveBlock(bi, -1)} disabled={bi === 0} aria-label="Move up" style={{ color:C.creamDim, opacity: bi===0?0.3:1, minHeight:38 }}><ChevronUp size={18}/></button>
+                <button className="ft-icon-btn-sm" onClick={() => moveBlock(bi, 1)} disabled={bi === blocks.length-1} aria-label="Move down" style={{ color:C.creamDim, opacity: bi===blocks.length-1?0.3:1, minHeight:38 }}><ChevronDown size={18}/></button>
               </div>
               <div style={{ flex:1, minWidth:0 }}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
@@ -1388,11 +1425,11 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                   const key = `${bi}-${si}`;
                   const assistVal = assistInputs[key] ?? "";
                   return (
-                    <div key={si} style={{ display:"grid", gridTemplateColumns: dedicatedProgressiveOverload ? "20px 1fr 1fr 1fr 44px 24px" : "20px 1fr 1fr 1fr 24px", gap:6, marginBottom:5, alignItems:"center" }}>
-                      <div style={{ fontSize:11, color: filled ? C.lime : C.creamDim, textAlign:"center" }}>{filled ? <Check size={12}/> : si+1}</div>
+                    <div key={si} className={`ft-setrow ${dedicatedProgressiveOverload ? "ft-setrow-a-rir" : "ft-setrow-a"}`}>
+                      <div className="ft-setrow-num" style={{ color: filled ? C.lime : C.creamDim }}>{filled ? <Check size={12}/> : si+1}</div>
                       <input
-                        className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()}
-                        placeholder="assist lbs" value={assistVal}
+                        className="ft-input" type="number" inputMode="decimal" enterKeyHint="next" onFocus={e=>e.target.select()}
+                        placeholder="assist" value={assistVal}
                         onChange={e => {
                           const v = e.target.value;
                           setAssistInputs(prev => ({ ...prev, [key]: v }));
@@ -1400,14 +1437,14 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                           setVal(bi, si, "w", eff === "" ? "" : String(Math.round(eff * 10) / 10));
                         }}
                       />
-                      <div className="ft-mono" style={{ fontSize:11.5, color:C.creamDim, textAlign:"center" }}>
+                      <div className="ft-mono ft-setrow-calc" style={{ color:C.creamDim }}>
                         {s.w ? `≈ ${s.w} lbs` : (latestWeight == null ? "no weight logged" : "= lbs lifted")}
                       </div>
-                      <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
+                      <input className="ft-input" type="number" inputMode="numeric" enterKeyHint="next" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
                       {dedicatedProgressiveOverload && (
-                        <input className="ft-input" type="number" inputMode="decimal" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                        <input className="ft-input ft-input-compact" type="number" inputMode="numeric" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
                       )}
-                      <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
+                      <button className="ft-icon-btn-sm" onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ color:C.creamDim }}><XIcon size={15}/></button>
                     </div>
                   );
                 }
@@ -1415,11 +1452,11 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                   const key = `${bi}-${si}`;
                   const addedVal = assistInputs[key] ?? "";
                   return (
-                    <div key={si} style={{ display:"grid", gridTemplateColumns: dedicatedProgressiveOverload ? "20px 1fr 1fr 1fr 44px 24px" : "20px 1fr 1fr 1fr 24px", gap:6, marginBottom:5, alignItems:"center" }}>
-                      <div style={{ fontSize:11, color: filled ? C.lime : C.creamDim, textAlign:"center" }}>{filled ? <Check size={12}/> : si+1}</div>
+                    <div key={si} className={`ft-setrow ${dedicatedProgressiveOverload ? "ft-setrow-a-rir" : "ft-setrow-a"}`}>
+                      <div className="ft-setrow-num" style={{ color: filled ? C.lime : C.creamDim }}>{filled ? <Check size={12}/> : si+1}</div>
                       <input
-                        className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()}
-                        placeholder="added lbs" value={addedVal}
+                        className="ft-input" type="number" inputMode="decimal" enterKeyHint="next" onFocus={e=>e.target.select()}
+                        placeholder="added" value={addedVal}
                         onChange={e => {
                           const v = e.target.value;
                           setAssistInputs(prev => ({ ...prev, [key]: v }));
@@ -1428,39 +1465,39 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                           setVal(bi, si, "w", eff === "" ? "" : String(Math.round(eff * 10) / 10));
                         }}
                       />
-                      <div className="ft-mono" style={{ fontSize:11.5, color:C.creamDim, textAlign:"center" }}>
+                      <div className="ft-mono ft-setrow-calc" style={{ color:C.creamDim }}>
                         {s.w ? `≈ ${s.w} lbs` : (latestWeight == null ? "no weight logged" : "= lbs total")}
                       </div>
-                      <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
+                      <input className="ft-input" type="number" inputMode="numeric" enterKeyHint="next" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
                       {dedicatedProgressiveOverload && (
-                        <input className="ft-input" type="number" inputMode="decimal" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                        <input className="ft-input ft-input-compact" type="number" inputMode="numeric" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
                       )}
-                      <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
+                      <button className="ft-icon-btn-sm" onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ color:C.creamDim }}><XIcon size={15}/></button>
                     </div>
                   );
                 }
                 if (REPS_ONLY_EXERCISES.has(b.exercise)) {
                   const repsFilled = !!s.r;
                   return (
-                    <div key={si} style={{ display:"grid", gridTemplateColumns: dedicatedProgressiveOverload ? "20px 1fr 44px 24px" : "20px 1fr 24px", gap:6, marginBottom:5, alignItems:"center" }}>
-                      <div style={{ fontSize:11, color: repsFilled ? C.lime : C.creamDim, textAlign:"center" }}>{repsFilled ? <Check size={12}/> : si+1}</div>
-                      <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
+                    <div key={si} className={`ft-setrow ${dedicatedProgressiveOverload ? "ft-setrow-r-rir" : "ft-setrow-r"}`}>
+                      <div className="ft-setrow-num" style={{ color: repsFilled ? C.lime : C.creamDim }}>{repsFilled ? <Check size={12}/> : si+1}</div>
+                      <input className="ft-input" type="number" inputMode="numeric" enterKeyHint="next" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
                       {dedicatedProgressiveOverload && (
-                        <input className="ft-input" type="number" inputMode="decimal" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                        <input className="ft-input ft-input-compact" type="number" inputMode="numeric" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
                       )}
-                      <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
+                      <button className="ft-icon-btn-sm" onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ color:C.creamDim }}><XIcon size={15}/></button>
                     </div>
                   );
                 }
                 return (
-                  <div key={si} style={{ display:"grid", gridTemplateColumns: dedicatedProgressiveOverload ? "20px 1fr 1fr 44px 24px" : "20px 1fr 1fr 24px", gap:6, marginBottom:5, alignItems:"center" }}>
-                    <div style={{ fontSize:11, color: filled ? C.lime : C.creamDim, textAlign:"center" }}>{filled ? <Check size={12}/> : si+1}</div>
-                    <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder="lbs" value={s.w} onChange={e => setVal(bi,si,"w",e.target.value)} />
-                    <input className="ft-input" type="number" inputMode="decimal" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
+                  <div key={si} className={`ft-setrow ${dedicatedProgressiveOverload ? "ft-setrow-w-rir" : "ft-setrow-w"}`}>
+                    <div className="ft-setrow-num" style={{ color: filled ? C.lime : C.creamDim }}>{filled ? <Check size={12}/> : si+1}</div>
+                    <input className="ft-input" type="number" inputMode="decimal" enterKeyHint="next" onFocus={e=>e.target.select()} placeholder="lbs" value={s.w} onChange={e => setVal(bi,si,"w",e.target.value)} />
+                    <input className="ft-input" type="number" inputMode="numeric" enterKeyHint="next" onFocus={e=>e.target.select()} placeholder={target ? `target ${target}` : "reps"} value={s.r} onChange={e => setVal(bi,si,"r",e.target.value)} />
                     {dedicatedProgressiveOverload && (
-                      <input className="ft-input" type="number" inputMode="decimal" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
+                      <input className="ft-input ft-input-compact" type="number" inputMode="numeric" min="0" max="10" step="0.5" onFocus={e=>e.target.select()} title="RIR (0-10) — Reps In Reserve" placeholder="RIR" value={s.rpe || ""} onChange={e => setVal(bi,si,"rpe",e.target.value)} />
                     )}
-                    <button onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={13}/></button>
+                    <button className="ft-icon-btn-sm" onClick={() => removeSet(bi,si)} aria-label="Remove set" style={{ color:C.creamDim }}><XIcon size={15}/></button>
                   </div>
                 );
               })}
@@ -1472,8 +1509,16 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
 
         <button className="ft-btn ft-btn-ghost" onClick={addOffSplit} style={{ marginBottom:14 }}><Plus size={13}/> Log something else (off-split)</button>
         <div style={{ fontSize:11, color:C.creamDim, marginBottom:10 }}>{completed} of {blocks.length} exercises have data — you can save with just what you finished.</div>
-        <button className="ft-btn ft-btn-primary" onClick={handleSaveDay} disabled={saving}><Zap size={13}/> {saving ? "Saving…" : "Save workout"}</button>
-        {justSaved && <span style={{ marginLeft:10, fontSize:12, color:C.lime, display:"inline-flex", alignItems:"center", gap:4 }}><Check size={13}/> Saved — day marked done</span>}
+        {/* Sticky on mobile. This is the longest form in the app — a full
+            day can run 6-8 exercises of 3-5 sets each — yet Save sat at
+            the very bottom of that scroll, while the much shorter Daily
+            Log form already used .ft-sticky-save. Auto-save covers the
+            data, but this tap is what marks the day done and runs PR
+            detection, so it shouldn't require scrolling past everything. */}
+        <div className="ft-sticky-save">
+          <button className="ft-btn ft-btn-primary" onClick={handleSaveDay} disabled={saving}><Zap size={13}/> {saving ? "Saving…" : "Save workout"}</button>
+          {justSaved && <span style={{ marginLeft:10, fontSize:12, color:C.lime, display:"inline-flex", alignItems:"center", gap:4 }}><Check size={13}/> Saved — day marked done</span>}
+        </div>
 
         {justSavedPRs.length > 0 && (
           <div style={{ display:"flex", alignItems:"flex-start", gap:10, marginTop:10, padding:"12px 14px", borderRadius:10, background:"linear-gradient(135deg, rgba(240,192,64,.18), rgba(240,192,64,.06))", border:`1px solid ${C.ember}` }}>
@@ -1498,7 +1543,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
               <div className="ft-card" style={{ padding:18, maxWidth:380, width:"100%", maxHeight:"75vh", overflowY:"auto", overscrollBehavior:"contain" }}>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
                   <div style={{ fontWeight:700, fontSize:13, display:"flex", alignItems:"center", gap:6 }}><Plus size={14} color={C.ember}/> What muscle group?</div>
-                  <button onClick={closeOffSplitPicker} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={14}/></button>
+                  <button onClick={closeOffSplitPicker} className="ft-icon-btn" style={{ color:C.creamDim }}><XIcon size={16}/></button>
                 </div>
                 <div style={{ position:"relative", marginBottom:12 }}>
                   <Search size={13} color={C.creamDim} style={{ position:"absolute", left:10, top:"50%", transform:"translateY(-50%)", pointerEvents:"none" }} />
@@ -1555,7 +1600,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
             <div className="ft-card" style={{ padding:18, maxWidth:380, width:"100%", maxHeight:"75vh", overflowY:"auto", overscrollBehavior:"contain" }}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
                 <div style={{ fontWeight:700, fontSize:13, display:"flex", alignItems:"center", gap:6 }}><CalendarDays size={14} color={C.amber}/> Pick a day-type</div>
-                <button onClick={() => setOptionalDayPickerOpen(null)} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={14}/></button>
+                <button onClick={() => setOptionalDayPickerOpen(null)} className="ft-icon-btn" style={{ color:C.creamDim }}><XIcon size={16}/></button>
               </div>
               <div style={{ fontSize:11, color:C.creamDim, marginBottom:12 }}>
                 {optionalDayPickerOpen.dateStr} is an optional day — train whichever day-type from {effectiveSplit?.name} makes sense right now.
@@ -1609,7 +1654,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
               <div className="ft-card" style={{ padding:18, maxWidth:380, width:"100%", maxHeight:"75vh", overflowY:"auto", overscrollBehavior:"contain" }}>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
                   <div style={{ fontWeight:700, fontSize:13, display:"flex", alignItems:"center", gap:6 }}><Repeat size={14} color={C.ember}/> Swap exercise — {swapOpen.grp}</div>
-                  <button onClick={() => setSwapOpen(null)} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={14}/></button>
+                  <button onClick={() => setSwapOpen(null)} className="ft-icon-btn" style={{ color:C.creamDim }}><XIcon size={16}/></button>
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                   {alternatives.map(alt => {
@@ -1629,8 +1674,8 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
                           setBlocks(prev => prev.map((b,i) => i!==bi ? b : { ...b, exercise:alt, sugg:altSugg, trend:altTrend, repTarget: altSugg?.targetReps, sets: b.sets.map((s,si)=>({w:defaultWeightForSet(alt, altSugg, si),r:""})) }));
                           setDirty(true);
                           setSwapOpen(null);
-                        }} style={{ flex:1, textAlign:"left", background:"none", border:"none", color:C.cream, fontSize:12, fontWeight:600, cursor:"pointer" }}>{alt}</button>
-                        {tutUrl && <a href={tutUrl} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{ color:C.ember, display:"flex" }}><ExternalLink size={13}/></a>}
+                        }} style={{ flex:1, textAlign:"left", background:"none", border:"none", color:C.cream, fontSize:12.5, fontWeight:600, cursor:"pointer", minHeight:"var(--ft-touch)", padding:0 }}>{alt}</button>
+                        {tutUrl && <a href={tutUrl} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} className="ft-icon-btn" aria-label="Tutorial" style={{ color:C.ember }}><ExternalLink size={16}/></a>}
                       </div>
                     );
                   })}
@@ -1831,7 +1876,7 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
             <div className="ft-card" style={{ padding:18, maxWidth:420, width:"100%", maxHeight:"78vh", overflowY:"auto", overscrollBehavior:"contain" }}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4 }}>
                 <div style={{ fontWeight:700, fontSize:13, display:"flex", alignItems:"center", gap:6 }}><List size={14} color={C.ember}/> All exercises A–Z</div>
-                <button onClick={() => setBrowseOpen(null)} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={14}/></button>
+                <button onClick={() => setBrowseOpen(null)} className="ft-icon-btn" style={{ color:C.creamDim }}><XIcon size={16}/></button>
               </div>
               <div style={{ fontSize:10.5, color:C.creamDim, marginBottom:12 }}>For {dayLabel} — tap to add, tap again to remove.</div>
               {letters.map(letter => (
@@ -1883,10 +1928,10 @@ export default function SplitDashboard({ userId, userSplitId, splitStartedOn, on
         const setForced = setSharingForced;
         return (
           <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }} onClick={e => { if (e.target===e.currentTarget) setSharingTemplate(null); }}>
-            <div className="ft-card" style={{ maxWidth:380, width:"100%", padding:16 }}>
+            <div className="ft-card" style={{ maxWidth:380, width:"100%", padding:16, maxHeight:"75vh", overflowY:"auto", overscrollBehavior:"contain" }}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
                 <div style={{ fontWeight:700, fontSize:13, display:"flex", alignItems:"center", gap:6 }}><Share2 size={14} color={C.ember}/> Share "{sharingTemplate.name}"</div>
-                <button onClick={() => setSharingTemplate(null)} style={{ background:"none", border:"none", color:C.creamDim, cursor:"pointer" }}><XIcon size={14}/></button>
+                <button onClick={() => setSharingTemplate(null)} className="ft-icon-btn" style={{ color:C.creamDim }}><XIcon size={16}/></button>
               </div>
               <div style={{ display:"flex", gap:4, padding:3, background:C.raised, borderRadius:8, marginBottom:12 }}>
                 <button onClick={() => setForced(false)} style={{ flex:1, border:"none", borderRadius:6, padding:"6px 10px", fontSize:11.5, fontWeight:700, cursor:"pointer", background: !forced ? C.surface : "transparent", color: !forced ? C.cream : C.creamDim }}>Send request</button>

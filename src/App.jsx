@@ -114,6 +114,7 @@ import {
   addCommunityFood,
 } from "./lib/storage";
 import { flushQueue, onQueueChange, onQueueError, clearQueue, isOnline } from "./lib/offlineQueue";
+import { useScrollLock } from "./lib/scrollLock";
 import { toastSuccess, toastUndo, toastError } from "./lib/toast";
 import { pushNotificationsSupported, getCurrentPushSubscription, subscribeToPushNotifications, unsubscribeFromPushNotifications } from "./lib/pushNotifications";
 import { WifiOff, RefreshCw } from "lucide-react";
@@ -1128,8 +1129,26 @@ const GlobalStyle = () => (
       padding-left: env(safe-area-inset-left);
       padding-right: env(safe-area-inset-right);
     }
-    /* Removes the gray flash Safari shows on every tap by default. */
+    /* Removes the gray flash Safari shows on every tap by default.
+       NOTE: this is why the button:active rule further down exists —
+       killing the native highlight without replacing it left most of the
+       app with zero response to a tap, which reads as lag. */
     * { -webkit-tap-highlight-color: transparent; }
+
+    /* Global border-box. This was previously set on only .ft-btn and (in
+       the mobile media query) .ft-input/.ft-select, leaving everything
+       else on content-box, which caused two separate layout bugs:
+         - body height:100% plus the four safe-area padding rules
+           above made the body TALLER than the viewport by the size of the
+           insets (93px on an iPhone 15 Pro), so every screen carried that
+           much phantom scroll — and it fought the overscroll-behavior
+           rule sitting right next to it.
+         - the modal pattern (overlay with padding:16 wrapping a card with
+           width:100% and padding:20) rendered the card 40px wider than
+           its container, clipping ~20px off each edge on every phone.
+       17 places in the app pair width:100% with padding, so this is the
+       right level to fix it at rather than case by case. */
+    *, *::before, *::after { box-sizing: border-box; }
 
     .ft-app { font-family: 'Inter', sans-serif; background: ${COLORS.bg}; color: ${COLORS.cream}; min-height: 100%; }
     .ft-display { font-family: 'Inter', sans-serif; font-weight: 800; letter-spacing: -0.01em; }
@@ -1214,6 +1233,47 @@ const GlobalStyle = () => (
     .ft-btn-ghost { background: ${COLORS.surfaceRaised}; color: ${COLORS.cream}; border: 1px solid ${COLORS.border}; }
     .ft-btn-danger { background: transparent; color: ${COLORS.danger}; padding: 6px 8px; min-height: var(--ft-touch); min-width: var(--ft-touch); }
     .ft-btn-icon { min-height: var(--ft-touch); min-width: var(--ft-touch); padding: 0; }
+
+    /* ── Press feedback for everything that isn't a .ft-btn ───────────
+       The global -webkit-tap-highlight-color:transparent above removes
+       the browser's own tap flash, but only .ft-btn, .ft-card-clickable
+       and the two nav item classes ever defined an :active state to
+       replace it. That left the large majority of controls in the app
+       (43 of the 73 buttons in SplitDashboard alone) giving no response
+       at all to a tap, which reads as the app being slow rather than as
+       a missing style. This is the catch-all; the more specific rules
+       below still win where they exist, and they use the same value so
+       the two are indistinguishable. */
+    button:active:not(:disabled), a:active { transform: scale(0.97); }
+
+    /* Icon-only buttons. Lucide icons render at 12-16px, so a bare
+       <button> around one is a ~16px tap target — roughly a third of the
+       44px minimum, and these sit right next to inputs where a mis-tap
+       is destructive. Two sizes: the full square for anywhere with room
+       (modal close buttons, toasts), and a narrow variant for the set-row
+       grids, which are too width-constrained for a 44px column but have
+       the full row height to grow into. */
+    .ft-icon-btn, .ft-icon-btn-sm {
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: inherit;
+    }
+    .ft-icon-btn { min-width: var(--ft-touch); min-height: var(--ft-touch); }
+    .ft-icon-btn-sm { min-width: 32px; min-height: var(--ft-touch); width: 100%; }
+    .ft-icon-btn:disabled, .ft-icon-btn-sm:disabled { cursor: default; }
+
+    /* Narrow numeric fields (RIR, and the assisted/glute-ham columns).
+       .ft-input's 10px horizontal padding leaves only 24px of content in
+       a 44px column once the mobile 16px font kicks in — about two
+       characters, so the placeholder "RIR" and a value like "7.5" were
+       both clipped on every phone. */
+    .ft-input-compact { padding-left: 4px; padding-right: 4px; text-align: center; }
 
     .ft-pill { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 3px 9px; border-radius: var(--ft-radius-pill); }
 
@@ -1363,6 +1423,73 @@ const GlobalStyle = () => (
       .ft-nav-item { padding: 10px; border-radius: 999px; flex-shrink: 0; }
       .ft-nav-item span { display: none; }
       .ft-nav-item svg { width: 18px; height: 18px; }
+    }
+
+    /* ── Set-row grids (Strength Training) ────────────────────────────
+       These used to be inline gridTemplateColumns on each row, which
+       meant they couldn't respond to viewport width at all. The
+       assisted-bodyweight and glute-ham variants carry three input
+       columns plus an optional RIR field, and measured through the real
+       chain (viewport -> .ft-app padding -> card padding -> reorder
+       chevron column -> gaps) a 1fr column came out at 43px on a 320px
+       phone — about two characters of usable space once the mobile 16px
+       font applies. Moving them to classes lets the readout drop to its
+       own line below the inputs on narrow screens instead. */
+    .ft-setrow { display: grid; gap: 6px; margin-bottom: 5px; align-items: center; }
+    .ft-setrow-num { font-size: 11px; text-align: center; }
+    .ft-setrow-calc { font-size: 11.5px; text-align: center; }
+    /* These columns hold 2-4 digit numbers and nothing else, so .ft-input's
+       default 10px side padding is pure overhead here — and it's the
+       binding constraint on a 320px phone, where giving the remove/reorder
+       controls a real tap target would otherwise have eaten into the
+       fields themselves. Centered because short numbers read better that
+       way in a narrow box. */
+    .ft-setrow .ft-input { padding-left: 6px; padding-right: 6px; text-align: center; }
+    /* weighted (default) */
+    .ft-setrow-w { grid-template-columns: 20px 1fr 1fr 32px; }
+    .ft-setrow-w-rir { grid-template-columns: 20px 1fr 1fr 48px 32px; }
+    /* reps-only */
+    .ft-setrow-r { grid-template-columns: 20px 1fr 32px; }
+    .ft-setrow-r-rir { grid-template-columns: 20px 1fr 48px 32px; }
+    /* assisted bodyweight / glute-ham: input, computed readout, reps */
+    .ft-setrow-a { grid-template-columns: 20px 1fr 1fr 1fr 32px; }
+    .ft-setrow-a-rir { grid-template-columns: 20px 1fr 1fr 1fr 48px 32px; }
+
+    /* On the smallest phones still in use (320px logical width) every
+       pixel in a set row is contested, so the narrow icon buttons give
+       back 2px each — still ~4x the original hit area, and the full 44px
+       row height is untouched. */
+    @media (max-width: 360px) {
+      .ft-setrow .ft-icon-btn-sm { min-width: 30px; }
+    }
+
+    @media (max-width: 430px) {
+      /* Drop the computed "≈ 185 lbs" readout onto its own line so the
+         two fields people actually type into get the full width back. */
+      .ft-setrow-a { grid-template-columns: 20px 1fr 1fr 32px; }
+      .ft-setrow-a-rir { grid-template-columns: 20px 1fr 48px 32px; }
+      .ft-setrow-a .ft-setrow-calc,
+      .ft-setrow-a-rir .ft-setrow-calc {
+        grid-column: 2 / -1;
+        grid-row: 2;
+        text-align: left;
+        font-size: 10.5px;
+        margin-top: -1px;
+      }
+    }
+
+    /* Respects the OS-level "reduce motion" setting. The app has 11
+       keyframe animations and 30+ transitions — entrance staggers, the
+       sway on stat icons, ring celebrations — which is a lot of movement
+       for anyone who gets motion sickness, and it's also needless battery
+       on a phone. Nothing is removed, just collapsed to instant. */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
     }
   `}</style>
 );
@@ -2858,6 +2985,19 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
     latestHealth.steps != null || latestHealth.restingHeartRate != null || latestHealth.sleepDurationMinutes != null
   );
 
+  // Trend chart for the health block — steps + resting HR over the most
+  // recent stretch of synced days (up to the last 14 of the 30 already
+  // loaded), short weekday-free labels since this chart is narrow.
+  const healthTrendData = healthDates.slice(-14).map(d => {
+    const h = healthMetrics[d] || {};
+    const dt = new Date(d + "T00:00:00");
+    return {
+      label: dt.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      steps: h.steps ?? null,
+      restingHeartRate: h.restingHeartRate ?? null,
+    };
+  });
+
   const goal = stats.suggestedCalories || 0;
   const consumed = e.caloriesConsumed || 0;
   const remaining = goal - consumed;
@@ -2963,7 +3103,28 @@ function Dashboard({ entries, sortedDates, latestDate, profile, chartData, worko
                     {latestHealth.hrv != null && (
                       <MacroChip label="HRV" value={`${fmt(latestHealth.hrv)} ms`} color={COLORS.creamDim} icon={<Activity size={13} />} />
                     )}
+                    {latestHealth.sleepScore != null && (
+                      <MacroChip label="Sleep score" value={fmt(latestHealth.sleepScore)} color={COLORS.mint} icon={<Moon size={13} />} />
+                    )}
                   </div>
+                </div>
+              )}
+              {healthTrendData.length > 1 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontSize: 9, color: COLORS.creamDim, textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}>
+                    <TrendingUp size={11} /> Last {healthTrendData.length} days
+                  </div>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <LineChart data={healthTrendData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+                      <XAxis dataKey="label" stroke={COLORS.creamDim} fontSize={10} />
+                      <YAxis yAxisId="steps" stroke={COLORS.amber} fontSize={10} width={40} />
+                      <YAxis yAxisId="hr" orientation="right" stroke={COLORS.warn} fontSize={10} width={32} />
+                      <Tooltip contentStyle={{ background: COLORS.surfaceRaised, border: `1px solid ${COLORS.border}`, borderRadius: 8, color: COLORS.cream }} />
+                      <Line yAxisId="steps" type="monotone" dataKey="steps" name="Steps" stroke={COLORS.amber} strokeWidth={2} dot={false} connectNulls />
+                      <Line yAxisId="hr" type="monotone" dataKey="restingHeartRate" name="Resting HR" stroke={COLORS.warn} strokeWidth={2} dot={false} connectNulls />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
               )}
             </div>
@@ -3226,6 +3387,7 @@ function LogEntry(props) {
 
   const sortedDates = useMemo(() => Object.keys(entries).sort().reverse(), [entries]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  useScrollLock(historyOpen);
   const todaysWeighIns = entries[selectedDate]?.weigh_ins || [];
   const hasWeighIn = todaysWeighIns.length > 0 || !!entries[selectedDate]?.weight;
 
@@ -3695,6 +3857,7 @@ function FoodLogTab({ userId, selectedDate, setSelectedDate, meals, addMeal, upd
   const [presets, setPresets] = useState([]);
   const [savingPreset, setSavingPreset] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  useScrollLock(historyOpen);
   const mealHistoryDates = useMemo(
     () => Object.keys(entries).filter(d => entries[d].meals?.length > 0).sort().reverse(),
     [entries]
@@ -4102,6 +4265,7 @@ function WeighInTab({ entries, weighInsForDate, onAdd, onDelete }) {
   const [tag, setTag] = useState("");
   const [saving, setSaving] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  useScrollLock(historyOpen);
   const weighInDates = useMemo(
     () => Object.keys(entries).filter((d) => (entries[d].weigh_ins?.length > 0) || entries[d].weight),
     [entries]
@@ -4313,6 +4477,7 @@ function WaterLogTab({ entries, waterLogsForDate, onAdd, onDelete, profile, late
   });
   const [saving, setSaving] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  useScrollLock(historyOpen);
   const [useMl, setUseMl] = useState(() => {
     try { return localStorage.getItem("forge_water_units") === "ml"; } catch { return false; }
   });
@@ -5052,7 +5217,7 @@ function MaxTrackerTab({ userId, maxAttempts, setMaxAttempts, latestWeight, gend
                       <span style={{ width: 6, height: 6, borderRadius: "50%", background: a.pass ? COLORS.mint : COLORS.danger, flexShrink: 0 }} />
                       <span style={{ color: COLORS.creamDim, flex: 1 }}>{prettyDate(a.date)}</span>
                       <span className="ft-mono" style={{ fontWeight: 600 }}>{fmt(a.weight)} lbs</span>
-                      <button onClick={() => removeAttempt(key, a.id)} aria-label="Delete attempt" style={{ background: "none", border: "none", color: COLORS.creamDim, cursor: "pointer", padding: 2 }}><X size={11} /></button>
+                      <button className="ft-icon-btn-sm" onClick={() => removeAttempt(key, a.id)} aria-label="Delete attempt" style={{ color: COLORS.creamDim, width: "auto", minWidth: 36 }}><X size={15} /></button>
                     </div>
                   ))}
                 </div>
@@ -5239,7 +5404,7 @@ function RehabTab({ userId, rehabLogs, setRehabLogs }) {
             <input className="ft-input" type="number" inputMode="decimal" placeholder="Weight (lbs)" value={s.w} onChange={(e) => updateSetRow(i, "w", e.target.value)} onFocus={(e) => e.target.select()} style={{ flex: 1 }} />
             <input className="ft-input" type="number" inputMode="numeric" placeholder="Reps" value={s.r} onChange={(e) => updateSetRow(i, "r", e.target.value)} onFocus={(e) => e.target.select()} style={{ flex: 1 }} />
             {draftSets.length > 1 && (
-              <button onClick={() => removeSetRow(i)} style={{ background: "none", border: "none", color: COLORS.creamDim, cursor: "pointer", padding: 4 }}><X size={14} /></button>
+              <button className="ft-icon-btn-sm" onClick={() => removeSetRow(i)} aria-label="Remove set" style={{ color: COLORS.creamDim, width: "auto", minWidth: 36 }}><X size={15} /></button>
             )}
           </div>
         ))}
@@ -5283,7 +5448,7 @@ function RehabTab({ userId, rehabLogs, setRehabLogs }) {
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <span className="ft-mono" style={{ fontSize: 12, color: COLORS.creamDim }}>{log.sets.map(formatSetDetail).join(", ")}</span>
-                        <button onClick={() => removeLog(log.id)} style={{ background: "none", border: "none", color: COLORS.creamDim, cursor: "pointer", padding: 2 }}><Trash2 size={12} /></button>
+                        <button className="ft-icon-btn-sm" onClick={() => removeLog(log.id)} aria-label="Delete entry" style={{ color: COLORS.creamDim, width: "auto", minWidth: 36 }}><Trash2 size={15} /></button>
                       </div>
                     </div>
                     {lsiNote && <div style={{ fontSize: 10.5, color: COLORS.ember, padding: "2px 0 6px" }}>{lsiNote}</div>}
@@ -5644,6 +5809,7 @@ function last30Days(data) {
 // open/close state and the All-time vs Last-30-days filtering.
 function ExpandableChartCard({ title, subtitle, headerExtra, data, renderChart, previewHeight = 220 }) {
   const [open, setOpen] = useState(false);
+  useScrollLock(open);
   const [range, setRange] = useState("30");
   const modalData = (range === "30" ? last30Days(data) : data).map((d) => ({ ...d, modalLabel: monthDay(d.date) }));
 

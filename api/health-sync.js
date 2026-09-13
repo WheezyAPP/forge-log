@@ -33,6 +33,52 @@ function dateKeyOf(isoString) {
   return isoString.slice(0, 10); // "2026-09-11T08:00:00Z" -> "2026-09-11"
 }
 
+// "What calendar date is it right now, from this person's chair."
+//
+// This used to be `new Date().toISOString().slice(0, 10)` — a UTC date.
+// Vercel functions run in UTC, so for anyone behind UTC (all of the
+// Americas) every sync after 8pm local was stamped with TOMORROW's
+// date: 8 of the Shortcut's 48 daily slots, and specifically the ones
+// carrying the day's final step count. Just after midnight the next
+// sync would then upsert that same wrong key with a near-zero "steps
+// today", silently wiping the evening. Net effect: every day's steps
+// froze at their 7:30pm value.
+//
+// Same bug class already fixed twice on the client (see the
+// computeAdaptiveTDEE and computeCreatineSaturation comments in
+// App.jsx) — the fix there was to stop deriving dates from UTC, and
+// it's the same fix here, just with the timezone coming from the
+// database instead of the browser.
+function localDateStrIn(timeZone) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(new Date()).map(p => [p.type, p.value])
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+// The device's IANA timezone, captured once at subscribe time — the
+// same column api/send-notifications.js already reads to run each
+// person's reminders on their own clock, reused here rather than
+// introducing a second source of truth. Falls back to UTC only when
+// there's genuinely nothing on file (someone who never enabled push
+// notifications), which is no worse than the current behavior.
+async function userTimeZone(supabase, userId) {
+  try {
+    const { data } = await supabase
+      .from("push_subscriptions")
+      .select("timezone")
+      .eq("user_id", userId)
+      .not("timezone", "is", null)
+      .limit(1)
+      .maybeSingle();
+    return data?.timezone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 // Buckets an array of {..., time|startTime} records by calendar date,
 // then reduces each bucket with the given strategy — "sum" (steps,
 // sleep minutes) or "avg" (anything heart-rate-family, where a daily
@@ -126,11 +172,15 @@ export default async function handler(req, res) {
   // if it's missing or didn't come through right (a real, observed
   // failure mode — the Shortcut's Formatted Date variable arriving as
   // an empty string), default to today's date server-side rather than
-  // rejecting the whole sync over one fragile field.
-  const isFlatFormat = ["steps", "restingHeartRate", "hrv", "activeZoneMinutes", "sleepDurationMinutes"].some(k => body[k] != null);
+  // rejecting the whole sync over one fragile field. "Today" means the
+  // sender's local today, not the server's — see localDateStrIn above
+  // for why that distinction silently cost 4 hours of data a day.
+  const isFlatFormat = ["steps", "restingHeartRate", "hrv", "activeZoneMinutes", "sleepDurationMinutes", "sleepScore"].some(k => body[k] != null);
   if (isFlatFormat) {
     const validDate = typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date.trim());
-    const date = validDate ? body.date.trim() : new Date().toISOString().slice(0, 10);
+    const date = validDate
+      ? body.date.trim()
+      : localDateStrIn(await userTimeZone(supabase, tokenRow.user_id));
     const row = { user_id: tokenRow.user_id, date, synced_at: new Date().toISOString() };
     const fieldMap = {
       steps: "steps",
@@ -138,6 +188,7 @@ export default async function handler(req, res) {
       hrv: "hrv",
       activeZoneMinutes: "active_zone_minutes",
       sleepDurationMinutes: "sleep_duration_minutes",
+      sleepScore: "sleep_score",
     };
     for (const [inKey, col] of Object.entries(fieldMap)) {
       if (body[inKey] != null && !Number.isNaN(parseFloat(body[inKey]))) row[col] = parseFloat(body[inKey]);
